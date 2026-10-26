@@ -1,13 +1,13 @@
 name: Game checks
 on:
   push:
-    branches: [main, import-qwaketf-complete-assets]
+    branches: [main]
   pull_request:
 permissions:
   contents: read
 jobs:
   startup:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
