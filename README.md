@@ -6,13 +6,15 @@ Everything (engine, map, physics, bot AI) is original JavaScript + WebGL 2. All 
 
 ## Play it
 
-**Easiest:** open `dist/QwakeTF-standalone.html` in Chrome, Edge or Firefox (double-click it).
-Everything is embedded in that one file, so no server or install is needed.
+**Easiest:** extract the complete ZIP and double-click `index.html` in Chrome, Edge or Firefox.
+When opened from disk it automatically opens `dist/QwakeTF-standalone.html`, which embeds the game and assets.
+You can also open that standalone file directly; no server or install is needed.
+Keep the `dist/` folder beside `index.html` when using the automatic launcher.
 
 **From source** (for hacking on the code): browsers block ES modules from `file://`, so serve the folder:
 
 - Windows: double-click `start-server.bat`
-- macOS / Linux: run `./start-server.sh`
+- macOS / Linux: run `sh start-server.sh` (also works after extracting a ZIP)
 - Or any static server, e.g. `python3 -m http.server 8000` / `npx serve`, then open http://localhost:8000
 
 Requires a browser with WebGL 2 (any current desktop browser).
@@ -87,6 +89,11 @@ Rebuild the standalone file after code changes:
 npx esbuild src/main.js --bundle --format=iife --minify --outfile=dist/bundle.js
 node tools/build-standalone.mjs
 ```
+
+## Startup checks
+
+Run `node tools/check-launcher.cjs` to check disk/HTTP launching and verify every embedded asset against `assets/`.
+GitHub Actions also tests the main menu and a running match in Chromium using both disk and HTTP URLs.
 
 ## Credits and licensing
 

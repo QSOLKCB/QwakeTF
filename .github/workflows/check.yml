@@ -1,0 +1,31 @@
+name: Game checks
+on:
+  push:
+    branches: [main, import-qwaketf-complete-assets]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  startup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Check launcher and embedded assets
+        run: node tools/check-launcher.cjs
+      - name: Install browser test dependencies
+        run: |
+          npm install --prefix "$RUNNER_TEMP/qwaketf-browser" --no-audit --no-fund playwright@1.56.1
+          "$RUNNER_TEMP/qwaketf-browser/node_modules/.bin/playwright" install --with-deps chromium
+      - name: Test disk and HTTP startup and gameplay
+        run: NODE_PATH="$RUNNER_TEMP/qwaketf-browser/node_modules" node tools/browser-check.cjs
+      - name: Retain game screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: game-screenshots
+          path: test-results/
+          if-no-files-found: ignore
