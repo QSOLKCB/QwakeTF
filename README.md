@@ -6,6 +6,8 @@ Everything (engine, map, physics, bot AI) is original JavaScript + WebGL 2. All 
 
 ## Play it
 
+**Play online:** [QwakeTF on GitHub Pages](https://qsolkcb.github.io/QwakeTF/).
+
 **Easiest:** extract the complete ZIP and double-click `index.html` in Chrome, Edge or Firefox.
 When opened from disk it automatically opens `dist/QwakeTF-standalone.html`, which embeds the game and assets.
 You can also open that standalone file directly; no server or install is needed.
@@ -89,6 +91,12 @@ Rebuild the standalone file after code changes:
 npx esbuild src/main.js --bundle --format=iife --minify --outfile=dist/bundle.js
 node tools/build-standalone.mjs
 ```
+
+## GitHub Pages
+
+The `Game checks` workflow deploys `main` to GitHub Pages after the launcher, asset-integrity and Chromium checks pass. Pull requests run the checks without deploying.
+
+Repository **Settings → Pages → Source** must be **GitHub Actions**. To redeploy manually, open **Actions → Game checks → Run workflow** and select `main`. The deployment includes the modular game, assets, standalone build and licence notices. No package installation or server is required for players.
 
 ## Startup checks
 
