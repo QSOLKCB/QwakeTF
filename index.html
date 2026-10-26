@@ -4,15 +4,28 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>QwakeTF</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&display=swap">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 <canvas id="game"></canvas>
 <canvas id="hud"></canvas>
-<div id="ui"></div>
+<div id="ui"><div class="screen"><div class="card"><h1>QwakeTF</h1><p>Loading the game…</p><p>If loading does not finish, <a href="dist/QwakeTF-standalone.html">open the standalone game</a>.</p></div></div></div>
 <noscript>This game needs JavaScript.</noscript>
-<script type="module" src="src/main.js"></script>
+<!-- QWAKE_BOOTSTRAP_START -->
+<script>
+// ES modules cannot load from file://. Use the embedded build for double-click play.
+if (location.protocol === 'file:') {
+  location.replace(new URL('dist/QwakeTF-standalone.html', location.href));
+} else {
+  const main = document.createElement('script');
+  main.type = 'module';
+  main.src = 'src/main.js';
+  main.onerror = () => {
+    document.querySelector('#ui p').textContent = 'The game could not load. Check that the complete project was extracted, or try the standalone game below.';
+  };
+  document.body.appendChild(main);
+}
+</script>
+<!-- QWAKE_BOOTSTRAP_END -->
 </body>
 </html>
