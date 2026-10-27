@@ -17,6 +17,8 @@ jobs:
           node-version: '22'
       - name: Check water routes, round resets, maps and explosive movement
         run: node tools/check-gameplay.mjs
+      - name: Check wall visibility and weapon collision
+        run: node tools/check-walls.mjs
       - name: Check launcher and embedded assets
         run: node tools/check-launcher.cjs
       - name: Install browser test dependencies

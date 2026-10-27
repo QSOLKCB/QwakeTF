@@ -12,21 +12,30 @@ export function texAxes(n) {
   return { s: [1, 0, 0], t: [0, 0, -1] };
 }
 
-// Returns faces that can actually be seen (not buried against another solid brush).
+// Cull only when one convex brush covers the entire outward-offset polygon.
+// A few buried sample points are insufficient: floor and balcony slabs can hide
+// the samples while leaving a large exposed wall between them (Well's front wall).
+function coveredFace(world, face, mask) {
+  const points = face.verts.map(p => v3.ma(p, 0.5, face.n));
+  const mins = [0, 1, 2].map(i => Math.min(...points.map(p => p[i])));
+  const maxs = [0, 1, 2].map(i => Math.max(...points.map(p => p[i])));
+  for (const b of world.candidates(mins, maxs)) {
+    if (b === face.brush || !(b.contents & mask)) continue;
+    if (points.every(p => b.planes.every(pl => v3.dot(pl.n, p) <= pl.d + 1e-6))) return true;
+  }
+  return false;
+}
+
+// Conservative visibility: keep partially exposed faces. Fully buried faces
+// covered by several separate brushes may be retained, but cannot create holes.
 export function visibleFaces(world) {
   const out = []; const SOLID = CONTENTS.SOLID | CONTENTS.SKY;
   for (const b of world.brushes) {
     if (b.contents & (CONTENTS.CLIP | CONTENTS.TRIGGER | CONTENTS.LADDER)) continue;
     for (const f of b.faces) {
       if (!f.tex || f.tex === 'nodraw') continue;
-      const c = polyCenter(f.verts);
-      const probes = [c, ...f.verts.map(v => v3.lerp(v, c, 0.1))].map(p => v3.ma(p, 0.5, f.n));
-      let buried = true; for (const p of probes) { if (!(world.pointContents(p) & SOLID)) { buried = false; break; } }
-      if (buried && !(b.contents & CONTENTS.WATER)) continue;
-      if (b.contents & CONTENTS.WATER) { // water faces hidden inside other water / solid
-        if (probes.every(p => world.pointContents(p) & (SOLID | CONTENTS.WATER))) continue;
-      }
-      out.push(f);
+      const mask = b.contents & CONTENTS.WATER ? SOLID | CONTENTS.WATER : SOLID;
+      if (!coveredFace(world, f, mask)) out.push(f);
     }
   }
   return out;

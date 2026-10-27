@@ -69,6 +69,12 @@ const server = http.createServer((req, res) => {
         await page.keyboard.down('w'); await page.waitForTimeout(300); await page.keyboard.up('w');
         await page.screenshot({ path: path.join(root, 'test-results', `${name}-${mapId}-match.png`) });
         if (mapId === 'well') {
+          // The solid wall below each sniper opening must render from inside the base.
+          for (const sign of [-1, 1]) {
+            await page.evaluate(sign => { const a = window.qtf; a.paused = true; a.game.human.origin = [sign * 800, -240, 25]; a.game.human.prevOrigin = a.game.human.origin.slice(); a.viewAngles = [-5, sign < 0 ? -40 : 220, 0]; }, sign);
+            await page.waitForTimeout(100);
+            await page.screenshot({ path: path.join(root, 'test-results', `${name}-well-${sign < 0 ? 'blue' : 'red'}-wall.png`) });
+          }
           await page.evaluate(() => { const a = window.qtf; a.paused = true; a.game.human.origin = [-560, -80, 25]; a.game.human.prevOrigin = a.game.human.origin.slice(); a.viewAngles = [-5, 175, 0]; });
           await page.waitForTimeout(100);
           await page.screenshot({ path: path.join(root, 'test-results', `${name}-well-courtyard.png`) });
