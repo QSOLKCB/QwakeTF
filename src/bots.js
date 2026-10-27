@@ -45,6 +45,8 @@ export class Bot {
   onSpawn() {
     const p = this.p, g = this.g;
     this.path = null; this.goal = null; this.goalType = ''; this.nextGoal = 0; this.target = null; this.spot = null; this.pipesLaid = 0; this.aim = v3.copy(p.angles); this.cmdAngles = v3.copy(p.angles);
+    this.wp = 0; this.nextPath = 0; this.nextThink = 0; this.stuckT = 0; this.lastPos = v3.copy(p.origin);
+    this.waitUntil = 0; this.grenThrowAt = 0;
     p.cmd.angles = v3.copy(p.angles); p.cmd.gren1 = p.cmd.gren2 = false;
     if (p.cls === 'spy') { this.disguiseAt = g.time + 0.5; }
     const mates = g.players.filter(q => q !== p && q.team === p.team && q.brain);
@@ -178,7 +180,8 @@ export class Bot {
     // strafing in combat
     if (inCombat) { if (now > this.nextStrafe) { this.nextStrafe = now + rand(0.4, 1.2); this.strafe = pick([-1, 1, 0]); } cmd.side = clamp(cmd.side + this.strafe * 0.8, -1, 1); if (p.cls !== 'sniper' && Math.random() < dt * 0.3) cmd.jump = true; }
     // jumping
-    if (edgeType === 'jump' && hd < 48 && p.onGround) cmd.jump = true;
+    // A hull stopped 16 units from a ledge can be just over 48 units from its next node.
+    if (edgeType === 'jump' && hd < 64 && p.onGround) cmd.jump = true;
     if (d[2] > 24 && hd < 40 && p.onGround && p.waterLevel < 2) cmd.jump = true;
     // stuck detection
     const moved = v3.dist(p.origin, this.lastPos);

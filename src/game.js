@@ -31,6 +31,12 @@ export class Game {
     }
     for (const r of m.resupply) { if (this.nav) this.nav.markTeamZone([r.mins[0] - 200, r.mins[1] - 200, r.mins[2]], [r.maxs[0] + 200, r.maxs[1] + 200, r.maxs[2]], r.team); }
   }
+  dispose() {
+    // The map/world can outlive a match; only remove movers owned by this game.
+    const owned = new Set(this.doors);
+    this.world.movers = this.world.movers.filter(m => !owned.has(m));
+    this.doors = [];
+  }
   // ---------- helpers ----------
   sound(name, origin = null, vol = 1, opts) { if (!this.audio) return null; const b = this.assets && this.assets.sound(name); if (!b) return null; return this.audio.play(b, origin, vol, opts); }
   msg(text, team = -1) { this.messages.push({ text, time: this.time, team }); if (this.messages.length > 8) this.messages.shift(); }
@@ -83,6 +89,9 @@ export class Game {
     p.ammo = Object.assign({}, cdef.ammo); p.maxAmmo = cdef.maxAmmo; p.weapons = cdef.weapons.slice(); p.weaponIdx = cdef.primary ?? Math.max(0, p.weapons.length - 1);
     p.grens = [{ type: cdef.gren1[0], count: cdef.gren1[1] }, { type: cdef.gren2[0], count: cdef.gren2[1] }];
     p.primed = null; p.burning = null; p.infected = null; p.concUntil = 0; p.flashUntil = 0; p.gasUntil = 0; p.tranqUntil = 0; p.legUntil = 0; p.spinup = 0; p.charge = 0; p.zoom = false; p.speedScale = 1;
+    p.airUntil = 0; p.nextDrown = 0; p.waterLevel = 0; p.onGround = false; p.jumpHeld = false; p.jumped = false;
+    p.groundEnt = null; p.groundMover = null; p.prevOrigin = v3.copy(p.origin);
+    p.cmd = this.emptyCmd(); p.cmd.angles = v3.copy(s.angles); p.lastCmd = this.emptyCmd();
     p.anim = 'stand'; p.frame = PFRAMES.stand[0]; p.animT = 0; p.nextAttack = this.time + 0.3; p.spawnTime = this.time; p.lastAttacker = null; p.buildTimer = 0;
     for (const pipe of p.pipes) pipe.dead = true; p.pipes = [];
     if (!silent) { this.fx.teleport(p.origin); this.sound('misc/r_tele1', p.origin, 0.6); }

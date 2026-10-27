@@ -187,8 +187,15 @@ export class Renderer {
   }
   // ---------- world ----------
   // bake: result of bakeLightmaps(); texLookup(name) -> {tex,w,h}
+  disposeGroups(groups = []) {
+    for (const g of groups) { this.gl.deleteVertexArray(g.vao); this.gl.deleteBuffer(g.vb); this.gl.deleteBuffer(g.ib); }
+  }
   buildWorld(bake, texLookup, lmSize) {
     const gl = this.gl;
+    this.disposeGroups(this.worldGroups); this.disposeGroups(this.waterGroups);
+    if (this.lightmap) gl.deleteTexture(this.lightmap.tex);
+    if (this.skyVAO) gl.deleteVertexArray(this.skyVAO);
+    if (this.skyBuffer) gl.deleteBuffer(this.skyBuffer);
     const groups = new Map(), waterGroups = new Map(); const skyVerts = [];
     for (const { f, s, t, lmuv } of bake.faces) {
       const n = f.n;
@@ -209,7 +216,7 @@ export class Renderer {
     const build = (g) => { const out = []; for (const [name, grp] of g) out.push({ name, ...this.makeGroupVAO(grp), tex: grp.tex, full: grp.full }); return out; };
     this.worldGroups = build(groups); this.waterGroups = build(waterGroups);
     this.skyCount = skyVerts.length / 3;
-    if (this.skyCount) { this.skyVAO = gl.createVertexArray(); gl.bindVertexArray(this.skyVAO); const vb = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, vb); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(skyVerts), gl.STATIC_DRAW); gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0); gl.bindVertexArray(null); }
+    if (this.skyCount) { this.skyVAO = gl.createVertexArray(); gl.bindVertexArray(this.skyVAO); const vb = this.skyBuffer = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, vb); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(skyVerts), gl.STATIC_DRAW); gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0); gl.bindVertexArray(null); }
   }
   makeGroupVAO(grp) {
     const gl = this.gl; const vao = gl.createVertexArray(); gl.bindVertexArray(vao);
@@ -218,7 +225,7 @@ export class Renderer {
     gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 40, 0); gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 2, gl.FLOAT, false, 40, 12);
     gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 2, gl.FLOAT, false, 40, 20); gl.enableVertexAttribArray(3); gl.vertexAttribPointer(3, 3, gl.FLOAT, false, 40, 28);
     gl.bindVertexArray(null);
-    return { vao, count: grp.idx.length };
+    return { vao, vb, ib, count: grp.idx.length };
   }
   // Brush model (movers, sentries...) with flat per-face lighting sampled at the center
   buildBrushModel(brushes, texLookup, lightAt) {

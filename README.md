@@ -1,7 +1,7 @@
 # QwakeTF
 
 A browser-based, single-player tribute to **QuakeWorld Team Fortress** and **FortressOne**, with AI bots.
-Everything (engine, map, physics, bot AI) is original JavaScript + WebGL 2. All art and sound come from
+Everything (engine, maps, physics, bot AI) is original JavaScript + WebGL 2. All art and sound come from
 **LibreQuake** (BSD-3-Clause), so the whole package can be shared freely.
 
 ## Play it
@@ -26,6 +26,11 @@ Requires a browser with WebGL 2 (any current desktop browser).
 - **Map: Two Forts.** An original 2fort-style layout with two mirrored bases. Each has a spawn room with a team-only
   door and resupply pads, a ramp room, battlements with a capture pad, a basement flag room, and a sewer.
   A water tunnel leads to the moat, which a bridge crosses.
+- **Map: Well.** Select it in Single Player. An original tribute to Quake TF's `well6`, with two
+  industrial forts, a central dividing wall, tower-top flags, capture pads at the foot of each tower,
+  sniper balconies and water infiltration routes. Ramps connect the tower and balcony; water passages
+  are open from match start. This is a new layout inspired by Well, not an exact port of its BSP,
+  lifts or detpack-operated grates. It uses the same bundled LibreQuake assets as Two Forts.
 - **All 9 classes:** Scout, Sniper, Soldier, Demoman, Medic, HWGuy, Pyro, Spy, Engineer, each with its TF weapons and both
   grenade types. Weapons include charged sniper shots with headshots and leg hits, remote pipebombs, the assault cannon spin-up,
   flamethrower and burning, medikit healing and infection, and the tranquilizer.
@@ -75,7 +80,10 @@ src/bots.js                bot AI
 src/nav.js                 automatic navigation graph and A* pathfinding
 src/pmove.js               QuakeWorld-style player physics
 src/world.js               convex-brush world and collision traces
-src/map_2fort.js           the Two Forts map (brushes, lights, spawns, flags, bot spots)
+src/maps.js                map selection registry
+src/map_2fort.js           the Two Forts map
+src/map_well.js            the Well-inspired map
+src/map_builder.js         shared mirrored brush helpers
 src/lightmap.js            lightmap baker
 src/renderer.js            WebGL 2 renderer
 src/formats.js, assets.js  Quake .mdl/.spr/palette loaders, asset loading
@@ -98,13 +106,26 @@ The `Game checks` workflow deploys `main` to GitHub Pages after the launcher, as
 
 Repository **Settings → Pages → Source** must be **GitHub Actions**. To redeploy manually, open **Actions → Game checks → Run workflow** and select `main`. The deployment includes the modular game, assets, standalone build and licence notices. No package installation or server is required for players.
 
+## Gameplay checks
+
+Run `node tools/check-gameplay.mjs` for water-entry/exit routes in both directions, Scout and Spy
+movement, spawn clearance, navigation to flags/capture pads, repeated matches, automatic round resets,
+drowning/respawn state, and explosive movement. Normal drowning still applies after prolonged full
+submersion; use Space to swim up for air. Water entrances do not damage enemies or restrict classes.
+
+New matches remove the previous match's door colliders, so returning to the menu and starting again
+does not leave an invisible closed door in the spawn room. Map changes also release old world and door
+rendering resources. The standalone build includes both maps and the same fixes as HTTP play.
+
 ## Startup checks
 
 Run `node tools/check-launcher.cjs` to check disk/HTTP launching and verify every embedded asset against `assets/`.
-GitHub Actions also tests the main menu and a running match in Chromium using both disk and HTTP URLs.
+GitHub Actions also tests both maps, red-bot spawn exits, restarts and map switching in Chromium using both disk and HTTP URLs.
 
 ## Credits and licensing
 
 See `ASSET_LICENSES.md` for the review of FortressOne's asset sources and which ones can be reused.
 LibreQuake license and credits are in `assets/licenses/librequake/`.
+Well's design reference is Jim Kaufman's (Sgt.Thundercok) [original well6 readme](https://www.filefactory.org/tf/file/703).
+No original Well geometry, BSP, textures or other game data have been imported.
 QwakeTF is a fan project and is not affiliated with id Software, Valve or the FortressOne team.
