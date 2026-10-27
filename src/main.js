@@ -3,7 +3,7 @@ import { v3, m4, angleVectors, vecToAngles, clamp, lerp, angleMod, DEG } from '.
 import { Renderer } from './renderer.js';
 import { Audio } from './audio.js';
 import { Assets } from './assets.js';
-import { buildMap } from './map_2fort.js';
+import { MAPS, mapDefinition } from './maps.js';
 import { NavMesh } from './nav.js';
 import { visibleFaces, bakeLightmaps, LightProbe, LM_SIZE } from './lightmap.js';
 import { Game } from './game.js';
@@ -36,28 +36,53 @@ class App {
     this.hud = new HUD(this, this.hudCanvas);
     ui.loading('Building map', 0.02);
     await tick();
-    this.map = buildMap();
-    const texNames = new Set(ENTITY_TEXTURES); for (const b of this.map.world.brushes) for (const f of b.faces) if (f.tex) texNames.add(f.tex);
+    this.mapId = '2fort'; this.map = mapDefinition(this.mapId).build();
+    const texNames = new Set(ENTITY_TEXTURES);
+    for (const def of MAPS) {
+      const map = def.id === this.mapId ? this.map : def.build();
+      for (const b of map.world.brushes) for (const f of b.faces) if (f.tex) texNames.add(f.tex);
+      for (const d of map.doors) texNames.add(d.tex);
+    }
     this.assets = new Assets(this.r, this.audio, 'assets/');
     await this.assets.load([...texNames], (f) => ui.loading('Loading LibreQuake assets', 0.05 + f * 0.35));
     for (const [k, t] of Object.entries(makeFlagTextures(this.r))) this.assets.textures.set(k, t);
-    ui.loading('Baking lightmaps', 0.4); await tick();
-    const lighting = { lights: this.map.lights, sun: this.map.sun, sky: this.map.skylight, ambient: this.map.ambient };
-    const bake = await bakeLightmaps(this.map.world, visibleFaces(this.map.world), lighting, (f) => ui.loading('Baking lightmaps', 0.4 + f * 0.35));
-    this.r.buildWorld(bake, (n) => this.assets.tex(n), LM_SIZE);
-    this.probe = new LightProbe(this.map.world, lighting);
+    await this.prepareMap();
     this.entModels = buildEntityModels(this.r, (n) => this.assets.tex(n));
-    this.doorModels = this.map.doors.map(d => null);
-    ui.loading('Generating bot navigation', 0.8); await tick();
-    this.nav = new NavMesh(this.map.world, { seeds: [this.map.spawns[0][0].origin, this.map.spawns[1][0].origin] });
+    this.doorModels = [];
     ui.loading('Ready', 1);
     this.bindInput();
     this.state = 'menu'; ui.showMain();
     requestAnimationFrame((t) => this.frame(t));
   }
   // ---------------- game lifecycle ----------------
-  startGame(opts) {
+  async prepareMap() {
+    const ui = this.ui;
+    ui.loading('Baking ' + this.map.name + ' lightmaps', 0.4); await tick();
+    const lighting = { lights: this.map.lights, sun: this.map.sun, sky: this.map.skylight, ambient: this.map.ambient };
+    const bake = await bakeLightmaps(this.map.world, visibleFaces(this.map.world), lighting, f => ui.loading('Baking lightmaps', 0.4 + f * 0.35));
+    this.r.buildWorld(bake, n => this.assets.tex(n), LM_SIZE);
+    this.probe = new LightProbe(this.map.world, lighting);
+    ui.loading('Generating bot navigation', 0.8); await tick();
+    this.nav = new NavMesh(this.map.world, { seeds: this.map.spawns.map(s => s[0].origin) });
+  }
+  disposeGame() {
+    if (this.game) this.game.dispose();
+    this.game = null;
+    for (const model of this.doorModels || []) this.r.disposeGroups(model.groups);
+    this.doorModels = [];
+    this.keys.clear(); this.mouseButtons.clear();
+    if (this.ambient) { this.audio.stop(this.ambient); this.ambient = null; }
+  }
+  async startGame(opts) {
+    if (this.state === 'loading') return;
     this.audio.init(); this.audio.resume();
+    this.paused = true; this.disposeGame();
+    const def = mapDefinition(opts.map);
+    if (def.id !== this.mapId) {
+      this.state = 'loading'; this.map = def.build();
+      try { await this.prepareMap(); this.mapId = def.id; }
+      catch (e) { console.error(e); this.ui.fatal('Could not load map. Refresh to retry.'); return; }
+    }
     // reset nav team markings
     for (const n of this.nav.nodes) n.teamOnly = -1;
     const g = this.game = new Game({ map: this.map, nav: this.nav, assets: this.assets, audio: this.audio, settings: { capLimit: opts.capLimit, timeLimit: opts.timeLimit * 60, friendlyFire: opts.friendlyFire } });
@@ -76,7 +101,7 @@ class App {
     this.lastSpawnShown = -1;
     g.center(`${TEAM_NAMES[team]} team - ${CLASSES[opts.cls].name}`, 3);
   }
-  quitToMenu() { this.game = null; this.state = 'menu'; this.paused = true; if (this.ambient) { this.audio.stop(this.ambient); this.ambient = null; } if (document.pointerLockElement) { this.expectUnlock = true; document.exitPointerLock(); } this.ui.showMain(); }
+  quitToMenu() { this.disposeGame(); this.state = 'menu'; this.paused = true; if (document.pointerLockElement) { this.expectUnlock = true; document.exitPointerLock(); } this.ui.showMain(); }
   pause(menu = 'pause') { if (!this.game) return; this.paused = true; this.keys.clear(); this.mouseButtons.clear(); this.ui.show(menu); if (document.pointerLockElement) { this.expectUnlock = true; document.exitPointerLock(); } }
   resume() { if (!this.game) return; this.ui.hideAll(); this.paused = false; this.lockPointer(); }
   lockPointer() { try { const r = this.canvas.requestPointerLock({ unadjustedMovement: true }); if (r && r.catch) r.catch(() => { try { this.canvas.requestPointerLock(); } catch (e) { } }); } catch (e) { try { this.canvas.requestPointerLock(); } catch (e2) { } } }
@@ -100,6 +125,7 @@ class App {
     window.addEventListener('blur', () => { this.keys.clear(); this.mouseButtons.clear(); });
   }
   onKey(e, down) {
+    if (this.state === 'loading') return;
     const c = e.code;
     if (down && c === 'Backquote') { e.preventDefault(); if (this.ui.current === 'console') { if (this.game) this.resume(); else this.ui.back(); } else if (this.game) this.pause('console'); else this.ui.show('console'); return; }
     if (this.ui.current === 'console') { if (down && c === 'Escape') { if (this.game) this.resume(); else this.ui.back(); } return; }
@@ -224,6 +250,7 @@ class App {
   }
   // ---------------- rendering ----------------
   render(time, dt) {
+    if (this.state === 'loading') return;
     const r = this.r; if (!this.map) return;
     const view = this.computeView(time); this.view = view;
     const g = this.game;

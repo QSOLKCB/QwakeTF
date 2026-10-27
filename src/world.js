@@ -204,7 +204,9 @@ export class World {
       const d2 = n[0] * e[0] + n[1] * e[1] + n[2] * e[2] - dist;
       if (d2 > 0) getOut = true;
       if (d1 > 0) startOut = true;
-      if (d1 > 0 && d2 >= d1) return; // completely in front of this plane
+      // Both endpoints outside the same plane cannot enter the brush.
+      // Testing d2 >= d1 instead lets roundoff trap a swimmer sliding along a ramp.
+      if (d1 > 0 && d2 > 0) return;
       if (d1 <= 0 && d2 <= 0) continue;
       if (d1 > d2) { const f = (d1 - CLIP_EPS) / (d1 - d2); if (f > enter) { enter = f; clip = pl; } }
       else { const f = (d1 + CLIP_EPS) / (d1 - d2); if (f < leave) leave = f; }
