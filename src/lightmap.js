@@ -117,13 +117,17 @@ function mulInv(m, x, y, z) { return [m[0] * x + m[1] * y + m[2] * z, m[3] * x +
 export class LightProbe {
   constructor(world, lighting) { this.world = world; this.l = lighting; this.cache = new Map(); }
   at(p) {
-    const k = `${Math.round(p[0] / 64)},${Math.round(p[1] / 64)},${Math.round(p[2] / 64)}`; let v = this.cache.get(k); if (v) return v;
-    const q = [Math.round(p[0] / 64) * 64, Math.round(p[1] / 64) * 64, Math.round(p[2] / 64) * 64 + 8];
-    const s = (this.world.pointContents(q) & CONTENTS.SOLID) ? p : q;
+    const ix = Math.round(p[0] / 64), iy = Math.round(p[1] / 64), iz = Math.round(p[2] / 64);
+    const k = ((ix + 4096) * 8192 + (iy + 4096)) * 8192 + (iz + 4096); let v = this.cache.get(k); if (v) return v;
+    const q = [ix * 64, iy * 64, iz * 64 + 8];
+    // A cell whose sample point is buried uses the query point itself. That value is position-specific,
+    // so it is not cached: otherwise the cell's light would depend on which entity happened to ask first.
+    const buried = (this.world.pointContents(q) & CONTENTS.SOLID) !== 0;
+    const s = buried ? p : q;
     const { lights = [], sun, ambient = [0.1, 0.1, 0.1] } = this.l; let r = ambient[0] + 0.15, g = ambient[1] + 0.15, b = ambient[2] + 0.15;
     for (const l of lights) { const d = v3.dist(l.origin, s); if (d > l.radius) continue; if (this.world.rayBlocked(s, l.origin)) continue; const a = (1 - d / l.radius) * 0.8 * l.intensity; r += l.color[0] * a; g += l.color[1] * a; b += l.color[2] * a; }
     const sky = this.l.sky; if (sky && !this.world.rayBlocked(s, v3.ma(s, 3000, [0, 0, 1]), CONTENTS.SOLID)) { r += sky.color[0] * sky.intensity * 0.8; g += sky.color[1] * sky.intensity * 0.8; b += sky.color[2] * sky.intensity * 0.8; }
     if (sun && !this.world.rayBlocked(s, v3.ma(s, 4096, sun.dir), CONTENTS.SOLID)) { r += sun.color[0] * sun.intensity * 0.6; g += sun.color[1] * sun.intensity * 0.6; b += sun.color[2] * sun.intensity * 0.6; }
-    v = [Math.min(r, 1.6), Math.min(g, 1.6), Math.min(b, 1.6)]; this.cache.set(k, v); return v;
+    v = [Math.min(r, 1.6), Math.min(g, 1.6), Math.min(b, 1.6)]; if (!buried) this.cache.set(k, v); return v;
   }
 }

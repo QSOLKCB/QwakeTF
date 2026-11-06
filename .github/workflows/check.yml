@@ -15,6 +15,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Check controller input and fixed-step clock
+        run: node tools/check-input.mjs
+      - name: Check deterministic simulation parity
+        run: node tools/check-parity.mjs
       - name: Check water routes, round resets, maps and explosive movement
         run: node tools/check-gameplay.mjs
       - name: Check wall visibility and weapon collision
@@ -27,6 +31,8 @@ jobs:
           "$RUNNER_TEMP/qwaketf-browser/node_modules/.bin/playwright" install --with-deps chromium
       - name: Test disk and HTTP startup and gameplay
         run: NODE_PATH="$RUNNER_TEMP/qwaketf-browser/node_modules" node tools/browser-check.cjs
+      - name: Test controller, focus pause and exact render culling
+        run: NODE_PATH="$RUNNER_TEMP/qwaketf-browser/node_modules" node tools/browser-features.cjs
       - name: Retain game screenshots
         if: always()
         uses: actions/upload-artifact@v4

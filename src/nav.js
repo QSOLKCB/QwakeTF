@@ -24,7 +24,8 @@ export class NavMesh {
   }
   indexNodes() {
     const cell = SPACING * 2; this.cell = cell; this.hash = new Map();
-    const hk = (x, y, z) => `${Math.floor(x / cell)},${Math.floor(y / cell)},${Math.floor(z / 128)}`; this.hk = hk;
+    // Numeric cell keys (unique for |cell| < 4096 on each axis) avoid building strings on every lookup.
+    const hk = (x, y, z) => cellKey(Math.floor(x / cell), Math.floor(y / cell), Math.floor(z / 128)); this.hk = hk;
     for (const n of this.nodes) { const k = hk(n.p[0], n.p[1], n.p[2]); (this.hash.get(k) || this.hash.set(k, []).get(k)).push(n); }
   }
   trace(a, b) { return this.world.trace(a, b, this.mins, this.maxs, MASK_PLAYER); }
@@ -155,8 +156,9 @@ export class NavMesh {
     let best = null, bd = maxDist * maxDist;
     const cell = this.cell;
     const r = Math.ceil(maxDist / cell);
+    const cx = Math.floor(p[0] / cell), cy = Math.floor(p[1] / cell), cz = Math.floor(p[2] / 128);
     for (let dx = -r; dx <= r; dx++) for (let dy = -r; dy <= r; dy++) for (let dz = -2; dz <= 2; dz++) {
-      const l = this.hash.get(`${Math.floor(p[0] / cell) + dx},${Math.floor(p[1] / cell) + dy},${Math.floor(p[2] / 128) + dz}`);
+      const l = this.hash.get(cellKey(cx + dx, cy + dy, cz + dz));
       if (!l) continue;
       for (const n of l) { if (filter && !filter(n)) continue; const d = v3.dist2(n.p, p) + Math.abs(n.p[2] - p[2]) * 20; if (d < bd) { bd = d; best = n; } }
     }
@@ -166,27 +168,36 @@ export class NavMesh {
   findPath(a, b, team = -1, avoid = null) {
     if (!a || !b) return null;
     if (a === b) return [a];
-    const open = new MinHeap(); const g = new Map(); const came = new Map(); const closed = new Set();
-    g.set(a.id, 0); open.push(a, v3.dist(a.p, b.p));
+    // OPT-INV-001 / OPT-POOL-001: search state lives in persistent typed arrays indexed by node id and
+    // invalidated by a generation stamp, so a search allocates nothing but its result. Expansion order,
+    // heap tie-breaking and costs are identical to the Map/Set reference implementation.
+    const nodes = this.nodes, N = nodes.length;
+    if (!this._gScore || this._gScore.length < N) { this._gScore = new Float64Array(N); this._seen = new Uint32Array(N); this._shut = new Uint32Array(N); this._from = new Int32Array(N); this._heap = new SearchHeap(); this._gen = 0; }
+    const gs = this._gScore, seen = this._seen, shut = this._shut, from = this._from, open = this._heap;
+    let gen = ++this._gen; if (gen >= 0xffffffff) { seen.fill(0); shut.fill(0); gen = this._gen = 1; }
+    open.clear(); gs[a.id] = 0; seen[a.id] = gen; from[a.id] = -1; open.push(a, v3.dist(a.p, b.p));
     let iter = 0;
     while (open.size()) {
-      const cur = open.pop(); if (closed.has(cur.id)) continue; closed.add(cur.id);
-      if (cur === b) { const path = [cur]; let c = cur; while (came.has(c.id)) { c = came.get(c.id); path.push(c); } return path.reverse(); }
+      const cur = open.pop(); if (shut[cur.id] === gen) continue; shut[cur.id] = gen;
+      if (cur === b) { const path = [cur]; let c = cur.id; while (from[c] >= 0) { c = from[c]; path.push(nodes[c]); } open.clear(); return path.reverse(); }
       if (++iter > 400000) break;
-      const gc = g.get(cur.id);
+      const gc = gs[cur.id];
       for (const e of cur.edges) {
-        const m = e.to; if (closed.has(m.id)) continue;
+        const m = e.to, mid = m.id; if (shut[mid] === gen) continue;
         if (m.teamOnly >= 0 && m.teamOnly !== team) continue;
         let cost = e.cost; if (avoid && avoid(m)) cost += 400;
         const ng = gc + cost;
-        if (ng < (g.get(m.id) ?? Infinity)) { g.set(m.id, ng); came.set(m.id, cur); open.push(m, ng + v3.dist(m.p, b.p)); }
+        if (ng < (seen[mid] === gen ? gs[mid] : Infinity)) { gs[mid] = ng; seen[mid] = gen; from[mid] = cur.id; open.push(m, ng + v3.dist(m.p, b.p)); }
       }
     }
+    open.clear();
     return null;
   }
   markTeamZone(mins, maxs, team) { for (const n of this.nodes) if (n.p[0] >= mins[0] && n.p[0] <= maxs[0] && n.p[1] >= mins[1] && n.p[1] <= maxs[1] && n.p[2] >= mins[2] - 24 && n.p[2] <= maxs[2] + 24) n.teamOnly = team; }
   randomNode() { return this.nodes[Math.floor(Math.random() * this.nodes.length)]; }
 }
+
+function cellKey(x, y, z) { return ((x + 4096) * 8192 + (y + 4096)) * 8192 + (z + 4096); }
 
 function pointInPolyXY(f, x, y) {
   // project polygon to XY and test (faces are nearly horizontal)
@@ -200,9 +211,22 @@ function pointInPolyXY(f, x, y) {
   return false;
 }
 
-class MinHeap {
-  constructor() { this.a = []; }
-  size() { return this.a.length; }
-  push(n, k) { const a = this.a; a.push({ n, k }); let i = a.length - 1; while (i > 0) { const p = (i - 1) >> 1; if (a[p].k <= a[i].k) break; [a[p], a[i]] = [a[i], a[p]]; i = p; } }
-  pop() { const a = this.a; const top = a[0].n; const last = a.pop(); if (a.length) { a[0] = last; let i = 0; for (;;) { const l = 2 * i + 1, r = l + 1; let m = i; if (l < a.length && a[l].k < a[m].k) m = l; if (r < a.length && a[r].k < a[m].k) m = r; if (m === i) break; [a[m], a[i]] = [a[i], a[m]]; i = m; } } return top; }
+// Binary min-heap over parallel arrays. Sift rules (and so tie order) match the original object heap.
+class SearchHeap {
+  constructor() { this.n = []; this.k = []; }
+  size() { return this.n.length; }
+  clear() { this.n.length = 0; this.k.length = 0; }
+  push(node, key) {
+    const n = this.n, k = this.k; n.push(node); k.push(key); let i = n.length - 1;
+    while (i > 0) { const p = (i - 1) >> 1; if (k[p] <= k[i]) break; const tn = n[p]; n[p] = n[i]; n[i] = tn; const tk = k[p]; k[p] = k[i]; k[i] = tk; i = p; }
+  }
+  pop() {
+    const n = this.n, k = this.k; const top = n[0]; const ln = n.pop(), lk = k.pop(); const len = n.length;
+    if (len) {
+      n[0] = ln; k[0] = lk; let i = 0;
+      for (;;) { const l = 2 * i + 1, r = l + 1; let m = i; if (l < len && k[l] < k[m]) m = l; if (r < len && k[r] < k[m]) m = r; if (m === i) break; const tn = n[m]; n[m] = n[i]; n[i] = tn; const tk = k[m]; k[m] = k[i]; k[i] = tk; i = m; }
+    }
+    return top;
+  }
 }
+
