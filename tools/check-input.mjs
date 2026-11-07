@@ -1,6 +1,6 @@
 // Unit checks for the gamepad sampler and fixed simulation clock (node tools/check-input.mjs).
 import assert from 'node:assert/strict';
-import { deadzone, FpsGamepad, PAD, lookRate } from '../src/input.js';
+import { deadzone, FpsGamepad, PAD, lookRate, idleSample } from '../src/input.js';
 import { FixedClock } from '../src/clock.js';
 
 // ---- deadzone ----
@@ -65,6 +65,20 @@ const legacy = new FpsGamepad();
 legacy.sample([{ index: 1, id: 'L', mapping: 'standard', buttons: new Array(17).fill(0), axes: [0, 0, 0, 0] }]);
 s = legacy.sample([{ index: 1, id: 'L', mapping: 'standard', buttons: Object.assign(new Array(17).fill(0), { [PAD.RT]: 1 }), axes: [0, 0, 0, 0] }]);
 assert(s.held.attack);
+
+// idleSample: no input at all, but connection details survive (used when disarming mid-frame).
+{
+  const live = new FpsGamepad(); live.sample([pad()]);
+  const busy = live.sample([pad({ buttons: { [PAD.RT]: 1, [PAD.START]: 1 }, axes: [1, -1, 1, 1] })]);
+  assert(busy.armed && busy.held.attack && busy.pressed.pause);
+  const idle = idleSample(busy);
+  assert.equal(idle.connected, true); assert.equal(idle.id, busy.id);
+  assert.equal(idle.armed, false); assert.equal(idle.active, false);
+  assert.deepEqual(idle.move, [0, 0]); assert.deepEqual(idle.look, [0, 0]);
+  assert(Object.values(idle.held).every(v => v === false) && Object.values(idle.pressed).every(v => v === false));
+  assert.deepEqual(Object.keys(idle.held), Object.keys(busy.held));
+  assert.equal(idleSample(null).connected, false);
+}
 
 // Look response is odd and quadratic.
 assert.equal(lookRate(0, 2), 0);

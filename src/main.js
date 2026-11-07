@@ -13,7 +13,7 @@ import { CONTENTS, MASK_SOLID } from './world.js';
 import { buildEntityModels, ENTITY_TEXTURES, makeFlagTextures } from './models.js';
 import { HUD } from './hud.js';
 import { UI } from './ui.js';
-import { FpsGamepad, lookRate } from './input.js';
+import { FpsGamepad, lookRate, idleSample } from './input.js';
 
 const TICK = 1 / 60;
 const SETTINGS_KEY = 'qwaketf.settings.v2';
@@ -99,14 +99,17 @@ class App {
     this.state = 'playing'; this.paused = false; this.ui.hideAll();
     if (!this.padUsed) this.lockPointer();
     if (this.ambient) this.audio.stop(this.ambient);
-    this.pad.disarm();
+    this.disarmPad();
     this.ambient = this.audio.play(this.assets.sound('ambience/wind2'), null, 0.12, { loop: true });
     this.lastSpawnShown = -1;
     g.center(`${TEAM_NAMES[team]} team - ${CLASSES[opts.cls].name}`, 3);
   }
   quitToMenu() { this.disposeGame(); this.state = 'menu'; this.paused = true; if (document.pointerLockElement) { this.expectUnlock = true; document.exitPointerLock(); } this.ui.showMain(); }
-  pause(menu = 'pause') { if (!this.game) return; this.paused = true; this.keys.clear(); this.mouseButtons.clear(); this.pad.disarm(); this.ui.show(menu); if (document.pointerLockElement) { this.expectUnlock = true; document.exitPointerLock(); } }
-  resume() { if (!this.game) return; this.ui.hideAll(); this.paused = false; this.pad.disarm(); if (!this.padUsed) this.lockPointer(); }
+  pause(menu = 'pause') { if (!this.game) return; this.paused = true; this.keys.clear(); this.mouseButtons.clear(); this.disarmPad(); this.ui.show(menu); if (document.pointerLockElement) { this.expectUnlock = true; document.exitPointerLock(); } }
+  resume() { if (!this.game) return; this.ui.hideAll(); this.paused = false; this.disarmPad(); if (!this.padUsed) this.lockPointer(); }
+  // Disarming must also drop the cached sample: pollGamepad() stores it before acting on Start, and
+  // buildCmd() later in the same frame would otherwise replay inputs held through a resume.
+  disarmPad() { this.pad.disarm(); this.padState = idleSample(this.padState); }
   lockPointer() { try { const r = this.canvas.requestPointerLock({ unadjustedMovement: true }); if (r && r.catch) r.catch(() => { try { this.canvas.requestPointerLock(); } catch (e) { } }); } catch (e) { try { this.canvas.requestPointerLock(); } catch (e2) { } } }
   saveSettings() { try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(this.settings)); } catch (e) { } this.audio.setVolume(this.settings.volume); }
   // ---------------- input ----------------
@@ -125,7 +128,7 @@ class App {
       this.viewAngles[0] = clamp(this.viewAngles[0] + e.movementY * s * (this.settings.invert ? -1 : 1), -89, 89);
     });
     document.addEventListener('pointerlockchange', () => { if (document.pointerLockElement) return; if (this.expectUnlock) { this.expectUnlock = false; return; } if (this.state === 'playing' && !this.paused && !this.ui.overlayOpen()) this.pause(); });
-    window.addEventListener('blur', () => { this.keys.clear(); this.mouseButtons.clear(); this.pad.disarm(); });
+    window.addEventListener('blur', () => { this.keys.clear(); this.mouseButtons.clear(); this.disarmPad(); });
     // A hidden tab stops requestAnimationFrame; pause so the match does not resume mid-fight unattended.
     document.addEventListener('visibilitychange', () => { if (document.hidden && this.state === 'playing' && !this.paused && !this.ui.overlayOpen()) this.pause(); });
   }

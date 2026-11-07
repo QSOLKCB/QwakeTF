@@ -36,13 +36,19 @@ export const PAD_HELP = [
  * button and stick must return to neutral before input is accepted again, so a
  * button held while a menu closes is not replayed as a game action.
  */
+/** A sample with no input. Keeps connection details from `prev` so status displays stay correct. */
+export function idleSample(prev = null) {
+  const out = { connected: !!(prev && prev.connected), armed: false, id: prev ? prev.id : '', move: [0, 0], look: [0, 0], held: {}, pressed: {}, active: false };
+  for (const k in PAD_HOLD) out.held[k] = false;
+  for (const k in PAD_PRESS) out.pressed[k] = false;
+  return out;
+}
+
 export class FpsGamepad {
   constructor() { this.identity = ''; this.armed = false; this.prev = new Set(); }
   disarm() { this.armed = false; this.prev.clear(); }
   sample(pads = [], { deadzone: zone = 0.16 } = {}) {
-    const out = { connected: false, armed: false, id: '', move: [0, 0], look: [0, 0], held: {}, pressed: {}, active: false };
-    for (const k in PAD_HOLD) out.held[k] = false;
-    for (const k in PAD_PRESS) out.pressed[k] = false;
+    const out = idleSample();
     const pad = Array.from(pads || []).find(p => p && p.connected !== false && p.mapping === 'standard');
     if (!pad) { if (this.identity) { this.identity = ''; this.disarm(); } return out; }
     out.connected = true; out.id = pad.id;

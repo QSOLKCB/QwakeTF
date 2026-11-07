@@ -78,8 +78,23 @@ function fakeGamepad() {
     await page.evaluate(() => { window.__pad.release(9); }); await frames();
     await page.evaluate(() => window.__pad.press(9)); await frames();
     assert.equal(await page.evaluate(() => window.qtf.paused), false, 'Start resumes');
-    await page.evaluate(() => { window.__pad.release(9); window.__pad.press(7); }); await frames();
-    assert.equal(await page.evaluate(() => window.qtf.padState.armed), true);
+    await page.evaluate(() => window.__pad.neutral()); await frames();
+
+    // Regression (Codex P2 on e03fc95): with the pad re-armed during the pause, holding RT while pressing
+    // Start must not fire on the resume frame, nor until every input has returned to neutral.
+    await page.evaluate(() => window.__pad.press(9)); await frames();
+    assert.equal(await page.evaluate(() => window.qtf.paused), true, 'Start pauses');
+    await page.evaluate(() => window.__pad.neutral()); await frames();
+    assert.equal(await page.evaluate(() => window.qtf.padState.armed), true, 'pad re-arms while paused');
+    const fireBefore = await page.evaluate(() => window.qtf.game.human.lastFireTime);
+    await page.evaluate(() => { window.__pad.press(7); window.__pad.press(9); }); await frames(6);
+    const held = await page.evaluate(() => ({ paused: window.qtf.paused, fired: window.qtf.game.human.lastFireTime, attack: window.qtf.game.human.cmd.attack }));
+    assert.equal(held.paused, false, 'Start resumes');
+    assert.equal(held.fired, fireBefore, 'a trigger held through resume must not fire');
+    assert.equal(held.attack, false, 'no attack command from a stale controller sample');
+    await page.evaluate(() => window.__pad.neutral()); await frames();
+    await page.evaluate(() => window.__pad.press(7)); await page.waitForTimeout(300);
+    assert(await page.evaluate((t) => window.qtf.game.human.lastFireTime > t, fireBefore), 'a fresh trigger press fires after resuming');
     await page.evaluate(() => window.__pad.neutral()); await frames();
 
     // Unplugging the controller mid-match pauses.
