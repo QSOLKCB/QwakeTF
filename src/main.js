@@ -13,10 +13,11 @@ import { CONTENTS, MASK_SOLID } from './world.js';
 import { buildEntityModels, ENTITY_TEXTURES, makeFlagTextures } from './models.js';
 import { HUD } from './hud.js';
 import { UI } from './ui.js';
+import { FpsGamepad, lookRate, idleSample } from './input.js';
 
 const TICK = 1 / 60;
 const SETTINGS_KEY = 'qwaketf.settings.v2';
-const DEFAULTS = { sens: 4, invert: false, fov: 90, volume: 0.6, showFps: false, viewBob: true, crosshair: 1 };
+const DEFAULTS = { sens: 4, invert: false, fov: 90, volume: 0.6, showFps: false, viewBob: true, crosshair: 1, padSens: 2.5, padInvert: false, padDeadzone: 0.16 };
 
 class App {
   constructor() {
@@ -27,6 +28,7 @@ class App {
     this.game = null; this.paused = true; this.state = 'loading';
     this.lastFrame = performance.now(); this.fps = 0; this.fpsAcc = 0; this.fpsN = 0;
     this.hitTime = -10; this.toasts = [];
+    this.pad = new FpsGamepad(); this.padState = null; this.padConnected = false; this.padUsed = false;
   }
   async init() {
     const ui = this.ui = new UI(this);
@@ -95,22 +97,26 @@ class App {
     for (const t of [0, 1]) for (let i = 0; i < counts[t]; i++) { const cls = pickBotClass(g, t); const p = g.addPlayer({ name: names[ni++ % names.length], team: t, cls, bot: true, skill: opts.skill }); new Bot(g, p, opts.skill); p.respawnTime = g.time + 0.3 + Math.random(); }
     this.viewAngles = [0, team === 0 ? 0 : 180, 0];
     this.state = 'playing'; this.paused = false; this.ui.hideAll();
-    this.lockPointer();
+    if (!this.padUsed) this.lockPointer();
     if (this.ambient) this.audio.stop(this.ambient);
+    this.disarmPad();
     this.ambient = this.audio.play(this.assets.sound('ambience/wind2'), null, 0.12, { loop: true });
     this.lastSpawnShown = -1;
     g.center(`${TEAM_NAMES[team]} team - ${CLASSES[opts.cls].name}`, 3);
   }
   quitToMenu() { this.disposeGame(); this.state = 'menu'; this.paused = true; if (document.pointerLockElement) { this.expectUnlock = true; document.exitPointerLock(); } this.ui.showMain(); }
-  pause(menu = 'pause') { if (!this.game) return; this.paused = true; this.keys.clear(); this.mouseButtons.clear(); this.ui.show(menu); if (document.pointerLockElement) { this.expectUnlock = true; document.exitPointerLock(); } }
-  resume() { if (!this.game) return; this.ui.hideAll(); this.paused = false; this.lockPointer(); }
+  pause(menu = 'pause') { if (!this.game) return; this.paused = true; this.keys.clear(); this.mouseButtons.clear(); this.disarmPad(); this.ui.show(menu); if (document.pointerLockElement) { this.expectUnlock = true; document.exitPointerLock(); } }
+  resume() { if (!this.game) return; this.ui.hideAll(); this.paused = false; this.disarmPad(); if (!this.padUsed) this.lockPointer(); }
+  // Disarming must also drop the cached sample: pollGamepad() stores it before acting on Start, and
+  // buildCmd() later in the same frame would otherwise replay inputs held through a resume.
+  disarmPad() { this.pad.disarm(); this.padState = idleSample(this.padState); }
   lockPointer() { try { const r = this.canvas.requestPointerLock({ unadjustedMovement: true }); if (r && r.catch) r.catch(() => { try { this.canvas.requestPointerLock(); } catch (e) { } }); } catch (e) { try { this.canvas.requestPointerLock(); } catch (e2) { } } }
   saveSettings() { try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(this.settings)); } catch (e) { } this.audio.setVolume(this.settings.volume); }
   // ---------------- input ----------------
   bindInput() {
     window.addEventListener('keydown', (e) => this.onKey(e, true));
     window.addEventListener('keyup', (e) => this.onKey(e, false));
-    this.canvas.addEventListener('mousedown', (e) => { if (this.state === 'playing' && !this.paused) { if (!document.pointerLockElement) { this.lockPointer(); return; } this.mouseButtons.add(e.button); e.preventDefault(); } });
+    this.canvas.addEventListener('mousedown', (e) => { this.padUsed = false; if (this.state === 'playing' && !this.paused) { if (!document.pointerLockElement) { this.lockPointer(); return; } this.mouseButtons.add(e.button); e.preventDefault(); } });
     window.addEventListener('mouseup', (e) => this.mouseButtons.delete(e.button));
     this.canvas.addEventListener('contextmenu', (e) => e.preventDefault());
     window.addEventListener('wheel', (e) => { if (this.state === 'playing' && !this.paused && this.game && this.game.human) this.cycleWeapon(e.deltaY > 0 ? 1 : -1); }, { passive: true });
@@ -122,7 +128,9 @@ class App {
       this.viewAngles[0] = clamp(this.viewAngles[0] + e.movementY * s * (this.settings.invert ? -1 : 1), -89, 89);
     });
     document.addEventListener('pointerlockchange', () => { if (document.pointerLockElement) return; if (this.expectUnlock) { this.expectUnlock = false; return; } if (this.state === 'playing' && !this.paused && !this.ui.overlayOpen()) this.pause(); });
-    window.addEventListener('blur', () => { this.keys.clear(); this.mouseButtons.clear(); });
+    window.addEventListener('blur', () => { this.keys.clear(); this.mouseButtons.clear(); this.disarmPad(); });
+    // A hidden tab stops requestAnimationFrame; pause so the match does not resume mid-fight unattended.
+    document.addEventListener('visibilitychange', () => { if (document.hidden && this.state === 'playing' && !this.paused && !this.ui.overlayOpen()) this.pause(); });
   }
   onKey(e, down) {
     if (this.state === 'loading') return;
@@ -135,10 +143,11 @@ class App {
     if (['Tab', 'Space', 'F1'].includes(c)) e.preventDefault();
     if (down) {
       if (e.repeat) return;
+      this.padUsed = false;
       this.keys.add(c);
       const h = this.game.human;
       if (/^Digit[1-9]$/.test(c)) { const idx = +c.slice(5) - 1; if (h && idx < (h.weapons || []).length) this.selectWeapon(idx); }
-      else if (c === 'KeyQ') { if (h && this.prevWeapon !== undefined) this.selectWeapon(this.prevWeapon); }
+      else if (c === 'KeyQ') this.lastWeapon();
       else if (c === 'KeyM' || c === 'Comma') this.pause('class');
       else if (c === 'KeyN') this.pause('team');
       else if (c === 'KeyK') this.game.suicide(h);
@@ -153,13 +162,17 @@ class App {
     const toggle = (key, label) => { if (a === undefined) return `"${label}" is "${st[key] ? 1 : 0}"`; st[key] = a !== '0'; this.saveSettings(); return `${label} set to ${st[key] ? 1 : 0}`; };
     switch (cmd) {
       case '': return '';
-      case 'help': case 'cmdlist': return 'fov, sensitivity, volume, m_invert, cl_bob, show_fps, kill, class <name>, team <blue|red>, name <text>, addbot [blue|red] [class], removebot [blue|red], botskill <0-1>, timeleft, clear';
+      case 'help': case 'cmdlist': return 'fov, sensitivity, volume, m_invert, cl_bob, show_fps, joy_sensitivity, joy_invert, joy_deadzone, timescale, kill, class <name>, team <blue|red>, name <text>, addbot [blue|red] [class], removebot [blue|red], botskill <0-1>, timeleft, clear';
       case 'fov': { const r = setting('fov', 'fov', 10, 140); const asp = this.canvas.clientWidth / Math.max(1, this.canvas.clientHeight); const hf = ` (${Math.round(2 * Math.atan(Math.tan(st.fov * DEG / 2) * 0.75 * asp) / DEG)}° horizontal on this screen)`; return r + hf; }
       case 'sensitivity': case 'sens': return setting('sens', 'sensitivity', 0.1, 30);
       case 'volume': return setting('volume', 'volume', 0, 1);
       case 'm_invert': return toggle('invert', 'm_invert');
       case 'cl_bob': return toggle('viewBob', 'cl_bob');
       case 'show_fps': return toggle('showFps', 'show_fps');
+      case 'joy_sensitivity': case 'joy_sens': return setting('padSens', 'joy_sensitivity', 0.2, 10);
+      case 'joy_invert': return toggle('padInvert', 'joy_invert');
+      case 'joy_deadzone': return setting('padDeadzone', 'joy_deadzone', 0, 0.6);
+      case 'joy_status': return this.padConnected ? `controller: ${this.padState.id}${this.padState.armed ? '' : ' (release all buttons and sticks to activate)'}` : 'no standard-mapping controller detected (press a button on it)';
       case 'clear': this.ui.consoleLog = []; return '';
     }
     if (!g) return `"${cmd}" needs a running match (or unknown command; try help)`;
@@ -171,24 +184,29 @@ class App {
       case 'addbot': { let t = /^(0|b)/i.test(a || '') ? 0 : /^(1|r)/i.test(a || '') ? 1 : (g.players.filter(p => p.team === 0).length <= g.players.filter(p => p.team === 1).length ? 0 : 1); const c = CLASSES[(args[1] || '').toLowerCase()] ? args[1].toLowerCase() : pickBotClass(g, t); const used = new Set(g.players.map(p => p.name)); const name = BOT_NAMES.find(n => !used.has(n)) || 'Bot' + g.players.length; const skill = this.botSkill ?? g.players.find(p => p.bot)?.skill ?? 0.5; const p = g.addPlayer({ name, team: t, cls: c, bot: true, skill }); new Bot(g, p, skill); p.respawnTime = g.time + 0.5; return `added ${name} (${CLASSES[c].name}) to ${TEAM_NAMES[t]}`; }
       case 'removebot': case 'kickbot': { const t = /^(0|b)/i.test(a || '') ? 0 : /^(1|r)/i.test(a || '') ? 1 : -1; const bots = g.players.filter(p => p.bot && (t < 0 || p.team === t)); const b = bots[bots.length - 1]; if (!b) return 'no bots to remove'; g.removePlayer(b); return `removed ${b.name}`; }
       case 'botskill': { const n = num(a, 0, 1); if (n === null) return 'usage: botskill <0-1>'; this.botSkill = n; for (const p of g.players) if (p.bot) { p.skill = n; if (p.brain) p.brain.skill = n; } return `bot skill set to ${n}`; }
+      case 'timescale': case 'host_timescale': { if (a === undefined) return `"timescale" is "${g.timeScale}"`; const n = num(a, 0.1, 2); if (n === null) return 'usage: timescale <0.1-2> (single-player practice)'; g.timeScale = n; return `timescale set to ${n}`; }
       case 'timeleft': { const left = Math.max(0, g.settings.timeLimit - (g.time - (g.time0 || 0))); return `${Math.floor(left / 60)}:${String(Math.floor(left % 60)).padStart(2, '0')} left, score Blue ${g.score[0]} - Red ${g.score[1]}`; }
     }
     return `unknown command "${cmd}" (try help)`;
   }
+  lastWeapon() { const h = this.game.human; if (h && this.prevWeapon !== undefined) this.selectWeapon(this.prevWeapon); }
   selectWeapon(idx) { const h = this.game.human; if (!h || h.dead) return; if (idx !== h.weaponIdx) this.prevWeapon = h.weaponIdx; h.cmd.weapon = idx; }
   cycleWeapon(dir) { const h = this.game.human; if (!h || h.dead || !h.weapons) return; const n = h.weapons.length; let i = (h.cmd.weapon >= 0 ? h.cmd.weapon : h.weaponIdx); for (let k = 0; k < n; k++) { i = (i + dir + n) % n; if (this.game.hasAmmo(h, WEAPONS[h.weapons[i]])) break; } this.selectWeapon(i); }
   buildCmd() {
     const g = this.game, h = g.human; if (!h) return; const k = this.keys, cmd = h.cmd;
     const active = !this.paused;
-    cmd.forward = active ? (k.has('KeyW') || k.has('ArrowUp') ? 1 : 0) - (k.has('KeyS') || k.has('ArrowDown') ? 1 : 0) : 0;
-    cmd.side = active ? (k.has('KeyD') ? 1 : 0) - (k.has('KeyA') ? 1 : 0) : 0;
-    cmd.up = active ? (k.has('Space') ? 1 : 0) - (k.has('KeyC') || k.has('ControlLeft') ? 1 : 0) : 0;
-    cmd.jump = active && k.has('Space');
-    cmd.attack = active && (this.mouseButtons.has(0) || k.has('ControlRight'));
-    cmd.attack2 = active && this.mouseButtons.has(2);
-    cmd.gren1 = active && k.has('KeyG'); cmd.gren2 = active && k.has('KeyF');
-    cmd.special = active && (k.has('KeyE') || k.has('KeyR') || this.mouseButtons.has(1)); cmd.build = k.has('KeyR') ? 2 : 1;
-    cmd.disguise = active && k.has('KeyT'); cmd.feign = active && k.has('KeyV');
+    const ps = this.padState && this.padState.armed ? this.padState : null; const pad = (name) => !!(ps && ps.held[name]);
+    const jump = k.has('Space') || pad('jump'), down = k.has('KeyC') || k.has('ControlLeft') || pad('down');
+    cmd.forward = active ? clamp((k.has('KeyW') || k.has('ArrowUp') ? 1 : 0) - (k.has('KeyS') || k.has('ArrowDown') ? 1 : 0) + (ps ? ps.move[0] : 0), -1, 1) : 0;
+    cmd.side = active ? clamp((k.has('KeyD') ? 1 : 0) - (k.has('KeyA') ? 1 : 0) + (ps ? ps.move[1] : 0), -1, 1) : 0;
+    cmd.up = active ? (jump ? 1 : 0) - (down ? 1 : 0) : 0;
+    cmd.jump = active && jump;
+    cmd.attack = active && (this.mouseButtons.has(0) || k.has('ControlRight') || pad('attack'));
+    cmd.attack2 = active && (this.mouseButtons.has(2) || pad('attack2'));
+    cmd.gren1 = active && (k.has('KeyG') || pad('gren1')); cmd.gren2 = active && (k.has('KeyF') || pad('gren2'));
+    const dispenser = k.has('KeyR') || pad('dispenser');
+    cmd.special = active && (k.has('KeyE') || dispenser || this.mouseButtons.has(1) || pad('special')); cmd.build = dispenser ? 2 : 1;
+    cmd.disguise = active && (k.has('KeyT') || pad('disguise')); cmd.feign = active && (k.has('KeyV') || pad('feign'));
     cmd.angles = v3.copy(this.viewAngles);
   }
   // ---------------- main loop ----------------
@@ -197,12 +215,41 @@ class App {
     const dt = Math.min(0.1, (now - this.lastFrame) / 1000); this.lastFrame = now;
     this.fpsAcc += dt; this.fpsN++; if (this.fpsAcc > 0.5) { this.fps = Math.round(this.fpsN / this.fpsAcc); this.fpsAcc = 0; this.fpsN = 0; }
     const g = this.game;
+    this.pollGamepad(dt);
     if (g && !this.paused) {
       this.buildCmd();
       g.update(dt);
       this.processEvents();
     }
     this.render(now / 1000, dt);
+  }
+  // Standard-mapping gamepad: sampled once per rendered frame, like mouse look.
+  pollGamepad(dt) {
+    let pads = []; try { pads = navigator.getGamepads ? navigator.getGamepads() : []; } catch (e) { }
+    const st = this.settings; const s = this.padState = this.pad.sample(pads, { deadzone: st.padDeadzone });
+    const playing = this.state === 'playing' && this.game;
+    // Losing the controller mid-match pauses instead of leaving the player stuck.
+    if (this.padConnected && !s.connected && playing && !this.paused && this.padUsed) { this.padUsed = false; this.pause(); }
+    this.padConnected = s.connected;
+    if (!s.armed) return;
+    if (s.active) this.padUsed = true;
+    if (s.pressed.pause && this.state === 'menu' && (this.ui.current === 'main' || this.ui.current === 'sp')) { this.ui.act('start'); return; }
+    if (s.pressed.pause && playing) {
+      if (!this.paused) this.pause();
+      else if (this.ui.current !== 'console') this.resume();
+      return;
+    }
+    if (!playing || this.paused) return;
+    const h = this.game.human;
+    if (h && !h.dead) {
+      if (s.pressed.nextWeapon || s.pressed.cycleWeapon) this.cycleWeapon(1);
+      if (s.pressed.prevWeapon) this.cycleWeapon(-1);
+      if (s.pressed.lastWeapon) this.lastWeapon();
+    }
+    if (!this.game.human) return;
+    const zoomScale = h && h.zoom ? 0.3 : 1; const k = st.padSens * zoomScale * dt;
+    this.viewAngles[1] = angleMod(this.viewAngles[1] - lookRate(s.look[1], 1) * k);
+    this.viewAngles[0] = clamp(this.viewAngles[0] + lookRate(s.look[0], 1) * k * (st.padInvert ? -1 : 1), -89, 89);
   }
   processEvents() {
     const g = this.game, h = g.human;
@@ -270,7 +317,7 @@ class App {
     r.drawWater();
     if (g) {
       // beams + particles + sprites
-      if (g.fx.beams.length) { const arr = new Float32Array(g.fx.beams.length * 14); let o = 0; for (const b of g.fx.beams) { for (const p of [b.a, b.b]) { arr[o++] = p[0]; arr[o++] = p[1]; arr[o++] = p[2]; arr[o++] = b.color[0]; arr[o++] = b.color[1]; arr[o++] = b.color[2]; arr[o++] = b.color[3]; } } r.drawLines(arr, g.fx.beams.length * 2); }
+      if (g.fx.beams.length) { const need = g.fx.beams.length * 14; if (!this.beamScratch || this.beamScratch.length < need) this.beamScratch = new Float32Array(Math.max(need, 2 * (this.beamScratch ? this.beamScratch.length : 0), 14 * 64)); const arr = this.beamScratch; let o = 0; for (const b of g.fx.beams) { for (const p of [b.a, b.b]) { arr[o++] = p[0]; arr[o++] = p[1]; arr[o++] = p[2]; arr[o++] = b.color[0]; arr[o++] = b.color[1]; arr[o++] = b.color[2]; arr[o++] = b.color[3]; } } r.drawLines(arr, g.fx.beams.length * 2); }
       r.drawSprites(g.fx.collectSprites(this.assets), view.angles);
       r.drawParticles(g.fx.p, g.fx.count);
       this.drawViewModel(g, time, view);
@@ -281,11 +328,16 @@ class App {
   light(p) { return this.probe.at(p); }
   drawEntities(g, time, view) {
     const r = this.r; const alpha = clamp(g.accum / TICK, 0, 1); const h = g.human;
+    // OPT-REDUCE-001: skip light lookups and draw calls for entities wholly outside the view frustum.
+    const vis = (o, model, pad = 2) => !model || r.sphereVisible(o, (model.bound || 0) + pad);
     // doors
     g.doors.forEach((d, i) => { if (this.doorModels[i]) r.drawBrushModel(this.doorModels[i], d.origin, this.light([(d.mins[0] + d.maxs[0]) / 2, (d.mins[1] + d.maxs[1]) / 2, d.mins[2] + 40])); });
     // items
     for (const it of g.items) {
-      if (!it.active) continue; const bob = Math.sin(time * 2 + it.bob) * 3; const o = [it.origin[0], it.origin[1], it.origin[2] + bob]; const L = this.light(it.origin);
+      if (!it.active) continue; const bob = Math.sin(time * 2 + it.bob) * 3; const o = [it.origin[0], it.origin[1], it.origin[2] + bob];
+      const im = it.type === 'health25' ? this.entModels.health : this.assets.model(it.type === 'ammo' ? 'backpack' : 'armor');
+      if (!vis(it.type === 'health25' ? o : [o[0], o[1], o[2] - 16], im)) continue;
+      const L = this.light(it.origin);
       if (it.type === 'health25') r.drawBrushModel(this.entModels.health, o, [L[0] * 1.2, L[1] * 1.2, L[2] * 1.2], [0, time * 60 % 360, 0]);
       else { const m = this.assets.model(it.type === 'ammo' ? 'backpack' : 'armor'); if (m) r.drawModel(m, 0, 0, 0, m4.model([o[0], o[1], o[2] - 16], [0, time * 60 % 360, 0]), it.type === 'armor' ? 'yellow' : 'default', L); }
     }
@@ -298,6 +350,8 @@ class App {
     }
     // buildings
     for (const b of g.buildings) {
+      const bb = b.type === 'sentry' ? Math.max(this.entModels.sentryBase.bound, 36 + this.entModels[`sentryHead${b.level}_${b.team}`].bound) : this.entModels['dispenser' + b.team].bound;
+      if (!r.sphereVisible(b.origin, bb + 2)) continue;
       const L = this.light(b.origin); const building = g.time < b.buildEnd; const k = building ? 0.6 + 0.4 * Math.sin(time * 10) : 1;
       if (b.type === 'sentry') { r.drawBrushModel(this.entModels.sentryBase, b.origin, L); r.drawBrushModel(this.entModels[`sentryHead${b.level}_${b.team}`], v3.add(b.origin, [0, 0, 36]), [L[0] * k, L[1] * k, L[2] * k], [b.pitch, b.yaw, 0]); }
       else r.drawBrushModel(this.entModels['dispenser' + b.team], b.origin, [L[0] * k, L[1] * k, L[2] * k], b.angles);
@@ -310,6 +364,7 @@ class App {
       if (p.dead && p.gibbed) continue;
       if (p.dead && g.time - p.deathTime > 8) continue;
       const o = p.prevOrigin ? v3.lerp(p.prevOrigin, p.origin, alpha) : p.origin;
+      if (!vis(o, pm)) continue;
       const showTeam = (p.disguise !== null && p.disguise !== undefined) ? p.disguise : p.team;
       const L = this.light(o);
       let tint = null; if (p.damageFlash > 0.05) tint = [1, 0.1, 0.1, p.damageFlash * 0.4]; if (p.burning) tint = [1, 0.5, 0.1, 0.25 + 0.15 * Math.sin(time * 20)];
@@ -319,11 +374,12 @@ class App {
     for (const pr of g.projectiles) {
       if (!pr.model) continue; const m = this.assets.model(pr.model); if (!m) continue;
       const o = pr.prevOrigin ? v3.lerp(pr.prevOrigin, pr.origin, alpha) : pr.origin;
+      if (!vis(o, m)) continue;
       const ang = pr.def.bounce ? pr.angles : vecToAngles(pr.velocity.some(x => x) ? pr.velocity : [1, 0, 0]);
       r.drawModel(m, 0, 0, 0, m4.model(o, ang), 'default', pr.def.light ? [1.5, 1.5, 1.5] : this.light(o), pr.gren ? gTint(pr.gren) : null);
     }
     // gibs
-    for (const gb of g.gibs) { const m = this.assets.model(gb.model); if (m) r.drawModel(m, 0, 0, 0, m4.model(gb.origin, gb.angles), 'default', this.light(gb.origin)); }
+    for (const gb of g.gibs) { const m = this.assets.model(gb.model); if (m && vis(gb.origin, m)) r.drawModel(m, 0, 0, 0, m4.model(gb.origin, gb.angles), 'default', this.light(gb.origin)); }
   }
   drawViewModel(g, time, view) {
     const h = g.human; if (!h || h.dead || h.zoom || h.feigning) return;

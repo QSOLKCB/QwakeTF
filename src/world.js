@@ -142,6 +142,22 @@ export class World {
     }
     this.stamp = new Int32Array(brushIdCounter + 4096); this.curStamp = 1;
   }
+  // Collect each brush whose grid cells overlap the AABB exactly once, in the same order as candidates().
+  // OPT-REDUCE-001/OPT-INV-001: hot traces reuse one buffer per caller instead of driving a generator.
+  gather(mins, maxs, out) {
+    out.length = 0;
+    const c = this.cell, grid = this.grid, stamp = this.stamp, nx = this.nx, ny = this.ny;
+    const x0 = Math.max(0, Math.floor(mins[0] / c) - this.gx), x1 = Math.min(nx - 1, Math.floor(maxs[0] / c) - this.gx);
+    const y0 = Math.max(0, Math.floor(mins[1] / c) - this.gy), y1 = Math.min(ny - 1, Math.floor(maxs[1] / c) - this.gy);
+    const z0 = Math.max(0, Math.floor(mins[2] / c) - this.gz), z1 = Math.min(this.nz - 1, Math.floor(maxs[2] / c) - this.gz);
+    const st = ++this.curStamp;
+    for (let z = z0; z <= z1; z++) for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+      const list = grid[(z * ny + y) * nx + x];
+      if (!list) continue;
+      for (let i = 0; i < list.length; i++) { const b = list[i]; if (stamp[b.id] !== st) { stamp[b.id] = st; out.push(b); } }
+    }
+    return out;
+  }
   // iterate brushes whose cells overlap AABB
   *candidates(mins, maxs) {
     const c = this.cell;
@@ -157,11 +173,15 @@ export class World {
   }
   pointContents(p) {
     let c = 0;
-    for (const b of this.candidates(p, p)) {
+    const list = this.gather(p, p, this._pointList || (this._pointList = []));
+    const x = p[0], y = p[1], z = p[2];
+    for (let i = 0; i < list.length; i++) {
+      const b = list[i]; const planes = b.planes;
       let inside = true;
-      for (const pl of b.planes) { if (v3.dot(pl.n, p) - pl.d > 0) { inside = false; break; } }
+      for (let j = 0; j < planes.length; j++) { const pl = planes[j], n = pl.n; if (n[0] * x + n[1] * y + n[2] * z - pl.d > 0) { inside = false; break; } }
       if (inside) c |= b.contents;
     }
+    list.length = 0;
     return c;
   }
   // Sweep a box (mins/maxs relative to position) from start to end. Returns trace result.
@@ -172,12 +192,15 @@ export class World {
     const s = v3.add(start, off), e = v3.add(end, off);
     const bmins = [Math.min(s[0], e[0]) - ext[0] - 1, Math.min(s[1], e[1]) - ext[1] - 1, Math.min(s[2], e[2]) - ext[2] - 1];
     const bmaxs = [Math.max(s[0], e[0]) + ext[0] + 1, Math.max(s[1], e[1]) + ext[1] + 1, Math.max(s[2], e[2]) + ext[2] + 1];
-    for (const b of this.candidates(bmins, bmaxs)) {
+    const list = this.gather(bmins, bmaxs, this._traceList || (this._traceList = []));
+    for (let i = 0; i < list.length; i++) {
+      const b = list[i];
       if (!(b.contents & mask) || b === ignoreBrush) continue;
       if (b.mins[0] > bmaxs[0] || b.maxs[0] < bmins[0] || b.mins[1] > bmaxs[1] || b.maxs[1] < bmins[1] || b.mins[2] > bmaxs[2] || b.maxs[2] < bmins[2]) continue;
       this.clipBrush(tr, b, s, e, ext);
       if (tr.allsolid) break;
     }
+    list.length = 0;
     for (const m of this.movers) {
       if (!m.solid || m === ignoreBrush) continue;
       const o = m.origin;

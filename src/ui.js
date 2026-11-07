@@ -1,6 +1,7 @@
 // HTML menu overlays
 import { CLASSES, CLASS_LIST, TEAM_NAMES } from './defs.js';
 import { MAPS, mapDefinition } from './maps.js';
+import { PAD_HELP } from './input.js';
 
 const SP_KEY = 'qwaketf.sp.v1';
 const $ = (s) => document.querySelector(s);
@@ -41,7 +42,7 @@ export class UI {
   pickClass(cls) { const g = this.app.game; if (!g) return; const h = g.human; g.setClass(h, cls); if (!h.dead) g.center(`You will respawn as ${CLASSES[cls].name} (press K to respawn now)`, 3); this.app.resume(); }
   pickTeam(t) { const g = this.app.game; if (!g) return; const h = g.human; if (h.team !== t) { g.setTeam(h, t); g.center(`You joined ${TEAM_NAMES[t]}`, 2); } this.app.resume(); }
   readSp() { const f = (id) => document.getElementById(id); if (!f('sp-name')) return; this.sp.name = (f('sp-name').value || 'Player').slice(0, 16); this.sp.map = f('sp-map').value; this.sp.team = +f('sp-team').value; this.sp.allies = +f('sp-allies').value; this.sp.enemies = +f('sp-enemies').value; this.sp.skill = +f('sp-skill').value; this.sp.capLimit = +f('sp-cap').value; this.sp.timeLimit = +f('sp-time').value; this.sp.friendlyFire = f('sp-ff').checked; }
-  readSettings() { const f = (id) => document.getElementById(id); const st = this.app.settings; st.sens = +f('st-sens').value; st.invert = f('st-inv').checked; st.fov = +f('st-fov').value; st.volume = +f('st-vol').value; st.showFps = f('st-fps').checked; st.viewBob = f('st-bob').checked; }
+  readSettings() { const f = (id) => document.getElementById(id); const st = this.app.settings; st.sens = +f('st-sens').value; st.invert = f('st-inv').checked; st.fov = +f('st-fov').value; st.volume = +f('st-vol').value; st.showFps = f('st-fps').checked; st.viewBob = f('st-bob').checked; st.padSens = +f('st-psens').value; st.padDeadzone = +f('st-pdz').value; st.padInvert = f('st-pinv').checked; }
   consoleHtml() {
     this.consoleLog = this.consoleLog || ['QwakeTF console. Type help for commands. ` or Esc closes.'];
     this.after = () => { const inp = document.getElementById('con-in'); setTimeout(() => inp.focus(), 0); const out = document.getElementById('con-out'); out.scrollTop = out.scrollHeight;
@@ -76,13 +77,18 @@ export class UI {
   pauseHtml() { return `<div class="screen"><div class="card menu"><h2>Paused</h2><button class="big" data-act="resume">Resume</button><button data-act="class">Change class</button><button data-act="team">Change team</button><button data-act="controls">Controls</button><button data-act="settings">Settings</button><button data-act="quit">Quit to main menu</button></div></div>`; }
   controlsHtml() { const rows = [['W A S D', 'Move'], ['Mouse', 'Aim'], ['Left click', 'Fire (hold to charge sniper rifle)'], ['Right click', 'Sniper zoom'], ['Space', 'Jump / swim up / respawn'], ['C', 'Swim down'], ['1–4, wheel, Q', 'Select weapon / previous weapon'], ['G', 'Primary grenade (hold to prime, release to throw)'], ['F', 'Secondary grenade'], ['E or middle click', 'Detonate pipebombs (Demoman), build sentry gun (Engineer)'], ['R', 'Build dispenser (Engineer)'], ['T', 'Toggle disguise (Spy)'], ['V', 'Feign death (Spy)'], ['K', 'Suicide / respawn'], ['M', 'Change class'], ['N', 'Change team'], ['Tab', 'Scoreboard'], ['F1 or H', 'In-game help'], ['Esc', 'Pause menu'], ['~ (backquote)', 'Console: fov, sensitivity, addbot, botskill, kill, help…']];
     return `<div class="screen"><div class="card wide"><h2>Controls</h2><table class="keys">${rows.map(r => `<tr><td><kbd>${r[0]}</kbd></td><td>${r[1]}</td></tr>`).join('')}</table>
+    <h3>Controller</h3><p class="muted small" id="pad-status">${this.padStatus()}</p><table class="keys">${PAD_HELP.map(r => `<tr><td><kbd>${r[0]}</kbd></td><td>${r[1]}</td></tr>`).join('')}</table>
     <h3>How to play</h3><p>Grab the enemy flag and carry it to your glowing capture pad. Two Forts: basement flags, battlement captures. Well: tower-top flags, captures at the foot of your tower. Water tunnels provide an alternate approach on both maps; swim up with Space to breathe. Each capture is worth 10 points. Engineers can hit their sentry with the spanner to repair and upgrade it. Medics heal teammates with the medikit and infect enemies. Soldiers can rocket-jump: look down, jump and fire. Concussion grenades launch anyone nearby. Touch the resupply pads in your spawn room to refill.</p>
     <div class="row"><button data-act="back">Back</button></div></div></div>`; }
+  padStatus() { const a = this.app; return a.padConnected ? `Connected: ${esc(a.padState.id)}${a.padState.armed ? '' : ' — release all buttons and sticks to activate.'}` : 'No controller detected. Connect a standard-layout controller (Xbox, PlayStation, etc.) and press any button.'; }
   settingsHtml() { const st = this.app.settings; return `<div class="screen"><div class="card"><h2>Settings</h2><div class="grid1">
     <label>Mouse sensitivity <input type="range" id="st-sens" min="0.5" max="15" step="0.1" value="${st.sens}" oninput="this.nextElementSibling.textContent=this.value"><output>${st.sens}</output></label>
     <label>Field of view (Quake-style: measured on a 4:3 view, 90 = classic; wider screens see more) <input type="range" id="st-fov" min="70" max="130" step="1" value="${st.fov}" oninput="this.nextElementSibling.textContent=this.value"><output>${st.fov}</output></label>
     <label>Volume <input type="range" id="st-vol" min="0" max="1" step="0.05" value="${st.volume}" oninput="this.nextElementSibling.textContent=this.value"><output>${st.volume}</output></label>
+    <label>Controller look sensitivity <input type="range" id="st-psens" min="0.2" max="10" step="0.1" value="${st.padSens}" oninput="this.nextElementSibling.textContent=this.value"><output>${st.padSens}</output></label>
+    <label>Controller stick deadzone <input type="range" id="st-pdz" min="0" max="0.6" step="0.01" value="${st.padDeadzone}" oninput="this.nextElementSibling.textContent=this.value"><output>${st.padDeadzone}</output></label>
     <label class="check"><input type="checkbox" id="st-inv" ${st.invert ? 'checked' : ''}> Invert mouse</label>
+    <label class="check"><input type="checkbox" id="st-pinv" ${st.padInvert ? 'checked' : ''}> Invert controller look</label>
     <label class="check"><input type="checkbox" id="st-bob" ${st.viewBob ? 'checked' : ''}> View bobbing</label>
     <label class="check"><input type="checkbox" id="st-fps" ${st.showFps ? 'checked' : ''}> Show FPS</label></div>
     <div class="row"><button data-act="back">Cancel</button><button class="big" data-act="savesettings">Save</button></div></div></div>`; }
@@ -90,6 +96,7 @@ export class UI {
     <p><b>QwakeTF</b> is an original, from-scratch JavaScript/WebGL 2 tribute to <b>QuakeWorld Team Fortress</b> and <b>FortressOne</b>. The engine, maps, bot AI and game code were written for this project. No id Software, Valve, or FortressOne code is used.</p>
     <h3>Art &amp; sound: LibreQuake</h3><p>All models, textures, sounds, palette and sprites come from <b>LibreQuake</b> (github.com/lavenderdotpet/LibreQuake), released under the BSD 3-Clause license. Copyright © 2019–2023 Contributors to the LibreQuake project. See <code>assets/licenses/librequake/</code> for the full license and credits.</p>
     <h3>Inspiration</h3><p>Team Fortress (1996) by Robin Walker, John Cook and Ian Caughley · FortressOne (fortressone.org) · QuakeWorld by id Software. Original map designs inspired by classic "2fort" and Jim Kaufman’s "The Well" (well6). Well uses open water passages and ramps in place of detpack grates and lifts; it is not an exact BSP port.</p>
+    <h3>Engine modules</h3><p>Gamepad input and the fixed-step simulation clock are adapted from <b>VANILLAJS</b> (github.com/QSOLKCB/VANILLAJS, Apache-2.0). Performance work follows the <b>OPT</b> optimization catalog (github.com/QSOLKCB/OPT, Apache-2.0).</p>
     <h3>Not included</h3><p>Quake shareware data, Team Fortress 2.8 data and FortressOne pak files are not redistributed because their licenses do not permit it.</p>
     <div class="row"><button data-act="back">Back</button></div></div></div>`; }
 }

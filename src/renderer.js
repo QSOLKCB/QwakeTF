@@ -85,7 +85,7 @@ export class Renderer {
     this.pLine = compile(gl, LINE_VS, LINE_FS);
     this.textures = new Map();
     this.models = new Map();
-    this.dlights = [];
+    this.dlights = []; this.cull = true; this.frameId = 0;
     this.time = 0;
     this.fov = 90;
     this.white = this.makeTexture(new Uint8Array([255, 255, 255, 255]), 1, 1, false);
@@ -142,14 +142,17 @@ export class Renderer {
       const rgba = indexedToRGBA(mdl.skins[Math.min(skinIdx, mdl.skins.length - 1)], mdl.skinW, mdl.skinH, palette, { top: opt.top ?? -1, bottom: opt.bottom ?? -1 });
       skins[vname] = this.makeTexture(rgba, mdl.skinW, mdl.skinH, true);
     }
-    const m = { name, mdl, posBuf, nrmBuf, uvBuf, skins, vcount: mdl.vcount, numFrames: mdl.numFrames, frameNames: mdl.frameNames, radius: mdl.radius };
+    // Exact bounding radius over every frame (the header radius is not trusted for culling).
+    let bound = 0; for (const fp of mdl.framePos) for (let i = 0; i < fp.length; i += 3) bound = Math.max(bound, Math.hypot(fp[i], fp[i + 1], fp[i + 2]));
+    const m = { name, mdl, posBuf, nrmBuf, uvBuf, skins, vcount: mdl.vcount, numFrames: mdl.numFrames, frameNames: mdl.frameNames, radius: mdl.radius, bound };
     this.models.set(name, m);
     return m;
   }
   drawModel(model, frameA, frameB, lerpT, modelMat, skin = 'default', light = null, tint = null, lightDir = null) {
     const gl = this.gl; const p = this.pModel;
     gl.useProgram(p.prog);
-    gl.uniformMatrix4fv(p.u.uVP, false, this.vp);
+    // OPT-INV-001: uniforms are per-program state, so the frame's view-projection is uploaded once.
+    if (p.lastVP !== this.vp) { gl.uniformMatrix4fv(p.u.uVP, false, this.vp); p.lastVP = this.vp; }
     gl.uniformMatrix4fv(p.u.uModel, false, modelMat);
     gl.uniform1f(p.u.uLerp, lerpT);
     const L = light || [1, 1, 1];
@@ -176,14 +179,23 @@ export class Renderer {
     gl.frontFace(gl.CCW);
     for (let i = 0; i < 5; i++) gl.disableVertexAttribArray(i);
   }
+  // OPT-INV-001: dynamic lights are fixed for a frame. Pack them once per frame and upload them
+  // once per program (uniform values persist on each program), instead of per draw call.
   setDLights(p) {
+    if (p.dlFrame === this.frameId) return;
+    p.dlFrame = this.frameId;
     const gl = this.gl; const n = Math.min(8, this.dlights.length);
     gl.uniform1i(p.u.uNumDL, n);
     if (n) {
-      const a = new Float32Array(32), c = new Float32Array(24);
-      for (let i = 0; i < n; i++) { const d = this.dlights[i]; a[i * 4] = d.origin[0]; a[i * 4 + 1] = d.origin[1]; a[i * 4 + 2] = d.origin[2]; a[i * 4 + 3] = d.radius; c[i * 3] = d.color[0]; c[i * 3 + 1] = d.color[1]; c[i * 3 + 2] = d.color[2]; }
-      gl.uniform4fv(p.u.uDL, a); gl.uniform3fv(p.u.uDLC, c);
+      if (this.dlPacked !== this.frameId) this.packDLights(n);
+      gl.uniform4fv(p.u.uDL, this.dlA); gl.uniform3fv(p.u.uDLC, this.dlC);
     }
+  }
+  packDLights(n) {
+    this.dlPacked = this.frameId;
+    const a = this.dlA || (this.dlA = new Float32Array(32)), c = this.dlC || (this.dlC = new Float32Array(24));
+    a.fill(0); c.fill(0);
+    for (let i = 0; i < n; i++) { const d = this.dlights[i]; a[i * 4] = d.origin[0]; a[i * 4 + 1] = d.origin[1]; a[i * 4 + 2] = d.origin[2]; a[i * 4 + 3] = d.radius; c[i * 3] = d.color[0]; c[i * 3 + 1] = d.color[1]; c[i * 3 + 2] = d.color[2]; }
   }
   // ---------- world ----------
   // bake: result of bakeLightmaps(); texLookup(name) -> {tex,w,h}
@@ -240,9 +252,12 @@ export class Renderer {
       for (const p of f.verts) grp.verts.push(p[0], p[1], p[2], v3.dot(p, s) / scale / tex.w, v3.dot(p, t) / scale / tex.h, 0, 0, n[0], n[1], n[2]);
       for (let i = 1; i < f.verts.length - 1; i++) grp.idx.push(base, base + i, base + i + 1);
     }
-    const out = [];
-    for (const [name, grp] of groups) out.push({ name, ...this.makeGroupVAO(grp), tex: grp.tex });
-    return { groups: out };
+    const out = []; let bound = 0;
+    for (const [name, grp] of groups) {
+      for (let i = 0; i < grp.verts.length; i += 10) bound = Math.max(bound, Math.hypot(grp.verts[i], grp.verts[i + 1], grp.verts[i + 2]));
+      out.push({ name, ...this.makeGroupVAO(grp), tex: grp.tex });
+    }
+    return { groups: out, bound };
   }
   drawBrushModel(bm, origin, light, angles = null) {
     const gl = this.gl; const p = this.pWorld;
@@ -264,6 +279,7 @@ export class Renderer {
     this.proj = m4.perspective(fovy, aspect, 4, 16384);
     this.view = m4.view(eye, angles);
     this.vp = m4.mul(this.proj, this.view);
+    this.frameId = (this.frameId || 0) + 1; this.frustum = frustumPlanes(this.vp);
     gl.clearColor(0.05, 0.05, 0.07, 1); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
     gl.enable(gl.DEPTH_TEST); gl.depthMask(true); gl.disable(gl.BLEND); gl.enable(gl.CULL_FACE);
   }
@@ -304,7 +320,9 @@ export class Renderer {
     gl.activeTexture(gl.TEXTURE0); gl.uniform1i(p.u.uTex, 0);
     for (const grp of byTex.values()) {
       gl.blendFunc(gl.SRC_ALPHA, grp.add ? gl.ONE : gl.ONE_MINUS_SRC_ALPHA);
-      const arr = new Float32Array(grp.data.length * 6 * 9); let o = 0;
+      const need = grp.data.length * 6 * 9;
+      if (!this.spriteScratch || this.spriteScratch.length < need) this.spriteScratch = new Float32Array(Math.max(need, 2 * (this.spriteScratch ? this.spriteScratch.length : 0), 64 * 54));
+      const arr = this.spriteScratch; let o = 0;
       for (const s of grp.data) {
         const c = s.color || [1, 1, 1, 1]; const hw = s.size / 2;
         const u0 = s.u0 ?? 0, u1 = s.u1 ?? 1;
@@ -315,7 +333,7 @@ export class Renderer {
         }
       }
       gl.bindTexture(gl.TEXTURE_2D, grp.tex.tex);
-      gl.bindVertexArray(this.spriteVAO); gl.bindBuffer(gl.ARRAY_BUFFER, this.spriteBuf); gl.bufferData(gl.ARRAY_BUFFER, arr, gl.DYNAMIC_DRAW);
+      gl.bindVertexArray(this.spriteVAO); gl.bindBuffer(gl.ARRAY_BUFFER, this.spriteBuf); this.uploadDynamic(this.spriteBuf, arr.subarray(0, need));
       gl.drawArrays(gl.TRIANGLES, 0, grp.data.length * 6);
     }
     gl.bindVertexArray(null); gl.enable(gl.CULL_FACE); gl.depthMask(true); gl.disable(gl.BLEND);
@@ -324,7 +342,7 @@ export class Renderer {
     if (!count) return; const gl = this.gl; const p = this.pPart;
     gl.useProgram(p.prog); gl.uniformMatrix4fv(p.u.uVP, false, this.vp); gl.uniform1f(p.u.uScreenH, this.canvas.height);
     gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA); gl.depthMask(false);
-    gl.bindVertexArray(this.partVAO); gl.bindBuffer(gl.ARRAY_BUFFER, this.partBuf); gl.bufferData(gl.ARRAY_BUFFER, arr.subarray(0, count * 8), gl.DYNAMIC_DRAW);
+    gl.bindVertexArray(this.partVAO); gl.bindBuffer(gl.ARRAY_BUFFER, this.partBuf); this.uploadDynamic(this.partBuf, arr.subarray(0, count * 8));
     gl.drawArrays(gl.POINTS, 0, count);
     gl.bindVertexArray(null); gl.depthMask(true); gl.disable(gl.BLEND);
   }
@@ -332,9 +350,28 @@ export class Renderer {
     if (!count) return; const gl = this.gl; const p = this.pLine;
     gl.useProgram(p.prog); gl.uniformMatrix4fv(p.u.uVP, false, this.vp);
     gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE); gl.depthMask(false);
-    gl.bindVertexArray(this.lineVAO); gl.bindBuffer(gl.ARRAY_BUFFER, this.lineBuf); gl.bufferData(gl.ARRAY_BUFFER, arr.subarray(0, count * 7), gl.DYNAMIC_DRAW);
+    gl.bindVertexArray(this.lineVAO); gl.bindBuffer(gl.ARRAY_BUFFER, this.lineBuf); this.uploadDynamic(this.lineBuf, arr.subarray(0, count * 7));
     gl.drawArrays(gl.LINES, 0, count);
     gl.bindVertexArray(null); gl.depthMask(true); gl.disable(gl.BLEND);
+  }
+  // Retained dynamic vertex buffers: GPU storage is (re)allocated only when it must grow; otherwise
+  // the frame's vertices overwrite the start of the existing store. Draw calls only read that prefix.
+  // VANILLAJS RTX5060TI adaptive run 42310094400 measured retained vs forced-fresh buffers at
+  // 3.7 ms vs 17.5 ms CPU+driver (32 frames, pixel parity) on an RTX 5060 Ti.
+  uploadDynamic(buf, data) {
+    const gl = this.gl; // buf must already be bound to ARRAY_BUFFER
+    if ((buf.capacity || 0) < data.byteLength) {
+      buf.capacity = Math.max(data.byteLength, 2 * (buf.capacity || 0), 65536);
+      gl.bufferData(gl.ARRAY_BUFFER, buf.capacity, gl.DYNAMIC_DRAW);
+    }
+    gl.bufferSubData(gl.ARRAY_BUFFER, 0, data);
+  }
+  // OPT-REDUCE-001: conservative sphere-vs-frustum test. Anything rejected lies wholly outside
+  // the view volume and would rasterize no pixels, so culling it is exact.
+  sphereVisible(c, r) {
+    if (!this.cull || !this.frustum) return true;
+    for (const pl of this.frustum) if (pl[0] * c[0] + pl[1] * c[1] + pl[2] * c[2] + pl[3] < -r) return false;
+    return true;
   }
   // view model: drawn with its own projection and cleared depth
   beginViewModel() { const gl = this.gl; gl.clear(gl.DEPTH_BUFFER_BIT); const aspect = this.canvas.width / this.canvas.height; const proj = m4.perspective(quakeFovY(90), aspect, 1, 512); /* gun is always drawn at fov 90, like Quake */ this.savedVP = this.vp; this.vp = m4.mul(proj, this.view); }
@@ -352,3 +389,15 @@ function invert3(r0, r1, r2) {
 function mulInv(m, x, y, z) { return [m[0] * x + m[1] * y + m[2] * z, m[3] * x + m[4] * y + m[5] * z, m[6] * x + m[7] * y + m[8] * z]; }
 
 export function quakeFovY(fov) { return 2 * Math.atan(Math.tan(Math.min(fov, 170) * DEG / 2) * 0.75) / DEG; }
+
+// Six normalized clip planes (Gribb/Hartmann) from a column-major view-projection matrix.
+function frustumPlanes(m) {
+  const row = (r) => [m[r], m[4 + r], m[8 + r], m[12 + r]];
+  const r0 = row(0), r1 = row(1), r2 = row(2), r3 = row(3);
+  const planes = [];
+  for (const [a, sign] of [[r0, 1], [r0, -1], [r1, 1], [r1, -1], [r2, 1], [r2, -1]]) {
+    const p = [r3[0] + sign * a[0], r3[1] + sign * a[1], r3[2] + sign * a[2], r3[3] + sign * a[3]];
+    const l = Math.hypot(p[0], p[1], p[2]) || 1; planes.push([p[0] / l, p[1] / l, p[2] / l, p[3] / l]);
+  }
+  return planes;
+}

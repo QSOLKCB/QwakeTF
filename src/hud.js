@@ -19,9 +19,9 @@ export class HUD {
     this.killfeed(g);
     this.messages(g);
     if (g.centerMsg) this.multiline(g.centerMsg.text, W / 2, H * 0.3, 22 * s, '#ffe9a8');
-    if (app.keys.has('Tab') || g.roundOver) this.scoreboard(g);
+    if (app.keys.has('Tab') || (app.padState && app.padState.armed && app.padState.held.scores) || g.roundOver) this.scoreboard(g);
     if (this.showHelp) this.help(h);
-    if (!document.pointerLockElement) this.text('Click to capture the mouse', W / 2, H * 0.42, 16 * s, '#ffd24d', 'center');
+    if (!document.pointerLockElement && !app.padUsed) this.text('Click to capture the mouse', W / 2, H * 0.42, 16 * s, '#ffd24d', 'center');
     if (app.settings.showFps) this.text(`${app.fps} fps`, W - 10, H - 10, 12, '#9f9', 'right');
   }
   text(t, x, y, size, color = '#fff', align = 'left', weight = 600) { const ctx = this.ctx; ctx.font = `${weight} ${size}px ${FONT}`; ctx.textAlign = align; ctx.textBaseline = 'middle'; ctx.lineWidth = Math.max(2, size / 7); ctx.strokeStyle = 'rgba(0,0,0,0.75)'; ctx.strokeText(t, x, y); ctx.fillStyle = color; ctx.fillText(t, x, y); }
@@ -105,6 +105,7 @@ export class HUD {
   }
   help(h) {
     const s = this.s, W = this.W; const lines = ['WASD move · Space jump/swim up · C swim down · Mouse aim · Left click fire', 'Right click: sniper zoom · 1-4 / wheel / Q: weapons · G / F: hold to prime grenade, release to throw', 'E: detonate pipebombs (Demoman) / build sentry (Engineer) · R: build dispenser', 'T: disguise (Spy) · V: feign death (Spy) · K: suicide · M: change class · N: change team', 'Tab: scores · Esc: menu · ~: console (fov, addbot…) · F1/H: toggle this help'];
+    if (this.app.padConnected) lines.push('Controller: sticks move/aim · RT fire · LT zoom · A jump · B down · RB/LB grenades · X special · L3 dispenser · Y/D-pad weapons · Start pause');
     if (h) lines.unshift(CLASSES[h.cls].name + ': ' + CLASSES[h.cls].desc);
     const y = this.H * 0.55; this.panel(W / 2 - 430 * s, y - 16 * s, 860 * s, lines.length * 22 * s + 14 * s, 0.7); lines.forEach((l, i) => this.text(l, W / 2, y + i * 22 * s, 13.5 * s, i === 0 && h ? '#ffd24d' : '#eee', 'center'));
   }

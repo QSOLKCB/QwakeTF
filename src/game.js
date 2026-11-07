@@ -5,6 +5,7 @@ import { playerMove } from './pmove.js';
 import { CLASSES, WEAPONS, GRENADES, ITEMS, PL_MINS, PL_MAXS, VIEW_HEIGHT, PFRAMES, TEAM_NAMES, SENTRY, DISPENSER, CLASS_LIST } from './defs.js';
 import { Effects } from './effects.js';
 import { installWeapons } from './weapons.js';
+import { FixedClock } from './clock.js';
 
 const TICK = 1 / 60;
 export const FLAG_RETURN_TIME = 60;
@@ -14,7 +15,7 @@ export class Game {
     this.map = map; this.world = map.world; this.nav = nav; this.assets = assets; this.audio = audio;
     this.settings = Object.assign({ capLimit: 10, timeLimit: 20 * 60, friendlyFire: false, respawnDelay: 5 }, settings || {});
     this.players = []; this.projectiles = []; this.buildings = []; this.zones = []; this.items = []; this.flags = []; this.doors = []; this.gibs = [];
-    this.time = 0; this.tickCount = 0; this.score = [0, 0]; this.messages = []; this.killfeed = []; this.centerMsg = null; this.accum = 0;
+    this.time = 0; this.tickCount = 0; this.score = [0, 0]; this.messages = []; this.killfeed = []; this.centerMsg = null; this.clock = new FixedClock({ step: TICK, maxFrame: 0.25, maxSteps: 16 }); this.timeScale = 1;
     this.fx = new Effects(); this.human = null; this.roundOver = false; this.roundEndTime = 0; this.nextId = 1; this.events = [];
     this.setupMap();
     installWeapons(this);
@@ -52,14 +53,16 @@ export class Game {
     const ext = [(maxs[0] - mins[0]) / 2, (maxs[1] - mins[1]) / 2, (maxs[2] - mins[2]) / 2];
     const off = [(maxs[0] + mins[0]) / 2, (maxs[1] + mins[1]) / 2, (maxs[2] + mins[2]) / 2];
     const s = v3.add(start, off), e = v3.add(end, off);
+    // OPT-REDUCE-001: reject entities with scalar bounds before allocating anything for the exact sweep.
+    const sx0 = Math.min(s[0], e[0]), sx1 = Math.max(s[0], e[0]), sy0 = Math.min(s[1], e[1]), sy1 = Math.max(s[1], e[1]), sz0 = Math.min(s[2], e[2]), sz1 = Math.max(s[2], e[2]);
+    const boxSweep = ext[0] > 0 || ext[2] > 0;
     const test = (ent, emins, emaxs) => {
-      const bm = [ent.origin[0] + emins[0] - ext[0], ent.origin[1] + emins[1] - ext[1], ent.origin[2] + emins[2] - ext[2]];
-      const bx = [ent.origin[0] + emaxs[0] + ext[0], ent.origin[1] + emaxs[1] + ext[1], ent.origin[2] + emaxs[2] + ext[2]];
-      // quick reject
-      if (Math.max(s[0], e[0]) < bm[0] || Math.min(s[0], e[0]) > bx[0] || Math.max(s[1], e[1]) < bm[1] || Math.min(s[1], e[1]) > bx[1] || Math.max(s[2], e[2]) < bm[2] || Math.min(s[2], e[2]) > bx[2]) return;
-      for (let i = 0; i < 3; i++) { bm[i] += 0.05; bx[i] -= 0.05; }
-      const h = sweepAABB(s, e, bm, bx);
-      if (h && h.startsolid && (ext[0] > 0 || ext[2] > 0)) return; // boxes already overlapping: let them separate
+      const o = ent.origin;
+      const m0 = o[0] + emins[0] - ext[0], m1 = o[1] + emins[1] - ext[1], m2 = o[2] + emins[2] - ext[2];
+      const x0 = o[0] + emaxs[0] + ext[0], x1 = o[1] + emaxs[1] + ext[1], x2 = o[2] + emaxs[2] + ext[2];
+      if (sx1 < m0 || sx0 > x0 || sy1 < m1 || sy0 > x1 || sz1 < m2 || sz0 > x2) return;
+      const h = sweepAABB(s, e, [m0 + 0.05, m1 + 0.05, m2 + 0.05], [x0 - 0.05, x1 - 0.05, x2 - 0.05]);
+      if (h && h.startsolid && boxSweep) return; // boxes already overlapping: let them separate
       if (h && h.fraction < tr.fraction) { tr.fraction = h.fraction; tr.normal = h.normal; tr.ent = ent; tr.endpos = v3.lerp(start, end, h.fraction); tr.startsolid = tr.startsolid || h.startsolid; tr.brush = null; tr.mover = null; }
     };
     if (!skipPlayers) for (const p of this.players) { if (p === ignore || p.dead || p.spectating) continue; test(p, p.mins, p.maxs); }
@@ -476,8 +479,7 @@ export class Game {
     }
     this.gibs = this.gibs.filter(g => g.life > 0);
   }
-  update(realDt) {
-    this.accum += Math.min(realDt, 0.25);
-    while (this.accum >= TICK) { this.step(TICK); this.accum -= TICK; }
-  }
+  // Seconds of simulation time left over after the last whole tick; used for render interpolation.
+  get accum() { return this.clock.accumulator; }
+  update(realDt) { return this.clock.advance(realDt, (dt) => this.step(dt), this.timeScale); }
 }
