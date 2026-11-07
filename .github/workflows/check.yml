@@ -10,6 +10,9 @@ jobs:
   startup:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    env:
+      PLAYWRIGHT_VERSION: '1.56.1'
+      BROWSER_TOOLS: /home/runner/.cache/qwaketf-browser
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -25,14 +28,52 @@ jobs:
         run: node tools/check-walls.mjs
       - name: Check launcher and embedded assets
         run: node tools/check-launcher.cjs
+      # OPT-INV-001 invariant-driven reuse: the Playwright package and its Chromium build are a pure
+      # function of (runner image, CPU architecture, Node major, Playwright version). Every one of those
+      # inputs is in the cache key, so a hit reuses an install that a fresh run would reproduce exactly.
+      # System packages (--with-deps) live outside the cache and are installed on every run.
+      - name: Restore browser test dependencies
+        id: browser-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ${{ env.BROWSER_TOOLS }}
+            ~/.cache/ms-playwright
+          key: qwaketf-browser-v1-ubuntu-24.04-${{ runner.arch }}-node22-playwright-${{ env.PLAYWRIGHT_VERSION }}
       - name: Install browser test dependencies
         run: |
-          npm install --prefix "$RUNNER_TEMP/qwaketf-browser" --no-audit --no-fund playwright@1.56.1
-          "$RUNNER_TEMP/qwaketf-browser/node_modules/.bin/playwright" install --with-deps chromium
+          # Ordinary path: install from the registry on a miss. On a hit, Playwright skips browser
+          # downloads only when its own install marker is present, and re-downloads otherwise.
+          if [ "${{ steps.browser-cache.outputs.cache-hit }}" != 'true' ]; then
+            npm install --prefix "$BROWSER_TOOLS" --no-audit --no-fund "playwright@$PLAYWRIGHT_VERSION"
+          fi
+          "$BROWSER_TOOLS/node_modules/.bin/playwright" install --with-deps chromium
+      - name: Verify browser test dependencies
+        run: |
+          # Fail closed: a restored tree must be exactly the pinned, consistent install.
+          npm ls --prefix "$BROWSER_TOOLS" "playwright@$PLAYWRIGHT_VERSION"
+          NODE_PATH="$BROWSER_TOOLS/node_modules" node -e '
+            const fs = require("fs"); const pin = process.env.PLAYWRIGHT_VERSION;
+            const v = require("playwright/package.json").version;
+            if (v !== pin) { console.error(`playwright ${v} does not match pin ${pin}`); process.exit(1); }
+            const exe = require("playwright").chromium.executablePath();
+            fs.accessSync(exe, fs.constants.X_OK);
+            console.log(`playwright ${v}; chromium ${exe}; cache hit: ${process.env.CACHE_HIT || "false"}`);
+          '
+        env:
+          CACHE_HIT: ${{ steps.browser-cache.outputs.cache-hit }}
+      - name: Save browser test dependencies
+        if: steps.browser-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ${{ env.BROWSER_TOOLS }}
+            ~/.cache/ms-playwright
+          key: ${{ steps.browser-cache.outputs.cache-primary-key }}
       - name: Test disk and HTTP startup and gameplay
-        run: NODE_PATH="$RUNNER_TEMP/qwaketf-browser/node_modules" node tools/browser-check.cjs
+        run: NODE_PATH="$BROWSER_TOOLS/node_modules" node tools/browser-check.cjs
       - name: Test controller, focus pause and exact render culling
-        run: NODE_PATH="$RUNNER_TEMP/qwaketf-browser/node_modules" node tools/browser-features.cjs
+        run: NODE_PATH="$BROWSER_TOOLS/node_modules" node tools/browser-features.cjs
       - name: Retain game screenshots
         if: always()
         uses: actions/upload-artifact@v4

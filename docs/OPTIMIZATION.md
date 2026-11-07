@@ -75,6 +75,42 @@ all inner `SHA256SUMS` verified). The run was on an NVIDIA GeForce RTX 5060 Ti, 
 The full-path section of the same run showed CPU kernel speedups (68.4→13.2 ms and 72.1→2.1 ms) with an unchanged
 16.8 ms frame interval p95. This is why the numbers here are reported as CPU time, not FPS.
 
+## CI: browser dependency reuse (OPT-INV-001, OPT-LEAN-001 pattern)
+
+**Invariant.** The Playwright npm package and its Chromium build are a pure function of the runner image
+(`ubuntu-24.04`), CPU architecture, Node major version (22) and the pinned Playwright version (`1.56.1`).
+Every one of those inputs is part of the cache key
+`qwaketf-browser-v1-ubuntu-24.04-<arch>-node22-playwright-<version>`. Changing any of them, or bumping `v1`,
+forces the ordinary install path.
+
+**Reuse rule.**
+- *Restore:* `actions/cache/restore` restores `~/.cache/qwaketf-browser` and `~/.cache/ms-playwright` under that exact key.
+  No prefix fallback is used, so a near-miss never restores.
+- *Ordinary path:* on a miss, `npm install` runs as before.
+- *Every run:* `playwright install --with-deps chromium` always runs. It installs the uncacheable system packages,
+  and re-downloads the browser if its install marker is missing.
+- *Verify, fail closed:* `npm ls` must report a consistent `playwright@<pin>` tree, the loaded package version must
+  equal the pin, and the Chromium executable must exist and be executable.
+- *Save:* happens only after a fresh install passes that verification.
+- *End-to-end gate:* the two browser suites still launch the browser and play matches.
+
+**Trust boundary.** The cache is written only by this workflow, and GitHub scopes caches to the repository and branch
+(a pull request can read caches from its base branch). A hit proves the files match a previous verified install of
+the same pin. It does not prove a fresh download would produce identical bytes. A cold run is the only lane that
+re-proves installation from the registry: change the key, or run on a branch without a cache.
+
+**Baseline (no cache), duration of "Install browser test dependencies":**
+
+| Run | Duration |
+|---|---:|
+| [40431914866](https://github.com/QSOLKCB/QwakeTF/actions/runs/40431914866) (PR #3) | 23 s |
+| [40432886585](https://github.com/QSOLKCB/QwakeTF/actions/runs/40432886585) (main) | 21 s |
+| [42315339960](https://github.com/QSOLKCB/QwakeTF/actions/runs/42315339960) (PR #4, `e03fc95`) | 398 s |
+
+The step is dominated by network variance. The first run of this change populates the cache (a miss).
+Timings for a hit will be added once a later run on this branch, or on `main`, restores it. The apt part of
+`--with-deps` still runs on every hit, so a hit does not remove all of the step's network time.
+
 ## Rejected candidates
 
 - **A* result cache (OPT-INV-001 / OPT-CACHE-001).** In the parity match, only 42 of 432 (2fort) and 63 of 421 (Well)
