@@ -113,7 +113,8 @@ download. Each part gets its own exact-identity cache.
 2. **System package archives** (`tools/ci-apt-cache.sh`). The package list is read from the pinned Playwright's
    own `install-deps --dry-run`. After `apt-get update`, the *plan* lists exactly the `.deb` files apt would
    download now. Each entry carries its filename, size and SHA-256 from the apt index. The SHA-256 is looked
-   up by the pool name, because the local name encodes an epoch as `%3a`. The cache key is the SHA-256 of
+   up by the URL-decoded pool name. The local name encodes an epoch as `%3a`, and the URI
+   percent-encodes `+`. The cache key is the SHA-256 of
    the plan, so a hit can only restore byte-identical archives.
    - Before install, each restored file is checked against the plan. A mismatch is deleted and downloaded again.
    - apt then verifies archives against its index as usual.
@@ -127,6 +128,10 @@ package (`xfonts-75dpi 1:1.0.5`):
 - Corrupting one byte of a cached archive made the strict check exit 1, and the install step discarded and
   re-downloaded only that file.
 - Reading the real package list returns Playwright's 33 packages.
+- The first CI run (`ecf69b4`) stopped at the plan step, with nothing used:
+  `fonts-freefont-ttf_20211204+svn4273-2` was not found, because the URI encodes `+` as `%2b`.
+  This was reproduced locally with `x11-apps 7.7+11build3` and fixed by URL-decoding. A separate
+  `apt-get download` gives the same SHA-256 as the plan, and all 9 font archives the runner needs resolve.
 
 **Trust boundary.** The caches are written only by this workflow, and GitHub scopes them to the repository and
 branch (a pull request can read caches from its base branch). Archive identity is checked against the apt index

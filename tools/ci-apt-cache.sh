@@ -31,8 +31,10 @@ plan() { # <playwright-bin> <plan-file>
     [ -n "$file" ] || continue
     local name="${file%%_*}"
     # SHA-256 from the apt index for this exact file. Match on the pool basename from the URI:
-    # the local archive name encodes an epoch ("1%3a1.0.5") that the index Filename omits.
+    # the local archive name encodes an epoch ("1%3a1.0.5") that the index Filename omits, and the
+    # URI percent-encodes characters such as "+" ("7.7%2b11build3"), so decode it first.
     local pool; pool=$(basename "${uri//\'/}")
+    pool=$(printf '%b' "${pool//%/\\x}")
     local sha; sha=$(apt-cache show --no-all-versions "$name" | awk -v f="$pool" '
       /^Filename:/ { n = split($2, p, "/"); cur = p[n] } /^SHA256:/ && cur == f { print $2; exit }')
     [ -n "$sha" ] || { echo "no SHA256 in the apt index for $file" >&2; exit 1; }
