@@ -77,39 +77,67 @@ The full-path section of the same run showed CPU kernel speedups (68.4→13.2 ms
 
 ## CI: browser dependency reuse (OPT-INV-001, OPT-LEAN-001 pattern)
 
-**Invariant.** The Playwright npm package and its Chromium build are a pure function of the runner image
-(`ubuntu-24.04`), CPU architecture, Node major version (22) and the pinned Playwright version (`1.56.1`).
-Every one of those inputs is part of the cache key
-`qwaketf-browser-v1-ubuntu-24.04-<arch>-node22-playwright-<version>`. Changing any of them, or bumping `v1`,
-forces the ordinary install path.
+**Where the time goes.** The log of run [42315339960](https://github.com/QSOLKCB/QwakeTF/actions/runs/42315339960)
+breaks down its 398 s `playwright install --with-deps chromium` step like this:
 
-**Reuse rule.**
-- *Restore:* `actions/cache/restore` restores `~/.cache/qwaketf-browser` and `~/.cache/ms-playwright` under that exact key.
-  No prefix fallback is used, so a near-miss never restores.
-- *Ordinary path:* on a miss, `npm install` runs as before.
-- *Every run:* `playwright install --with-deps chromium` always runs. It installs the uncacheable system packages,
-  and re-downloads the browser if its install marker is missing.
-- *Verify, fail closed:* `npm ls` must report a consistent `playwright@<pin>` tree, the loaded package version must
-  equal the pin, and the Chromium executable must exist and be executable.
-- *Save:* happens only after a fresh install passes that verification.
-- *End-to-end gate:* the two browser suites still launch the browser and play matches.
-
-**Trust boundary.** The cache is written only by this workflow, and GitHub scopes caches to the repository and branch
-(a pull request can read caches from its base branch). A hit proves the files match a previous verified install of
-the same pin. It does not prove a fresh download would produce identical bytes. A cold run is the only lane that
-re-proves installation from the registry: change the key, or run on a branch without a cache.
-
-**Baseline (no cache), duration of "Install browser test dependencies":**
-
-| Run | Duration |
+| Part | Time |
 |---|---:|
-| [40431914866](https://github.com/QSOLKCB/QwakeTF/actions/runs/40431914866) (PR #3) | 23 s |
-| [40432886585](https://github.com/QSOLKCB/QwakeTF/actions/runs/40432886585) (main) | 21 s |
-| [42315339960](https://github.com/QSOLKCB/QwakeTF/actions/runs/42315339960) (PR #4, `e03fc95`) | 398 s |
+| `npm install playwright@1.56.1` | 2 s |
+| `apt-get update` and resolving packages | 5 s |
+| apt download of 9 font packages (21.1 MB at 55 kB/s from the Ubuntu mirror) | **380 s** |
+| Download of Chromium, headless shell and ffmpeg (280 MB) | 6 s |
 
-The step is dominated by network variance. The first run of this change populates the cache (a miss).
-Timings for a hit will be added once a later run on this branch, or on `main`, restores it. The apt part of
-`--with-deps` still runs on every hit, so a hit does not remove all of the step's network time.
+Every required shared library was already on the runner image. Only fonts were new: Japanese, Chinese,
+Thai and Unifont, plus X font utilities.
+
+**First attempt: cache npm and Chromium only (commit `159642c`). Rejected as the whole answer.**
+
+| Run | Cache | Restore | Install step | Verify | Save |
+|---|---|---:|---:|---:|---:|
+| [42316254591](https://github.com/QSOLKCB/QwakeTF/actions/runs/42316254591) | miss | 0 s | 21 s | 1 s | 4 s |
+| [42316709025](https://github.com/QSOLKCB/QwakeTF/actions/runs/42316709025) | hit | 6 s | 28 s | 2 s | skipped |
+
+A hit removes only the ~8 s of npm and Chromium downloads and costs about 6 s to restore. The apt font
+download, the actual outlier, still ran on every hit. The cache was kept, but the apt part was added.
+
+**Current design.** The steps are `playwright install --with-deps chromium` split into the same parts and
+order: `apt-get update`, then `apt-get install -y --no-install-recommends <Playwright's list>`, then the browser
+download. Each part gets its own exact-identity cache.
+
+1. **Playwright package and browsers.** Key: runner image, CPU architecture, Node major and pinned Playwright
+   version. On a hit, Playwright downloads a browser only if its own install marker is missing. A
+   fail-closed check runs on every run:
+   - `npm ls` must report a consistent `playwright@<pin>` tree;
+   - the loaded package version must equal the pin;
+   - the Chromium executable must exist and be executable.
+2. **System package archives** (`tools/ci-apt-cache.sh`). The package list is read from the pinned Playwright's
+   own `install-deps --dry-run`. After `apt-get update`, the *plan* lists exactly the `.deb` files apt would
+   download now. Each entry carries its filename, size and SHA-256 from the apt index. The SHA-256 is looked
+   up by the pool name, because the local name encodes an epoch as `%3a`. The cache key is the SHA-256 of
+   the plan, so a hit can only restore byte-identical archives.
+   - Before install, each restored file is checked against the plan. A mismatch is deleted and downloaded again.
+   - apt then verifies archives against its index as usual.
+   - On a miss, every planned archive must pass a strict check before it is saved.
+   - When nothing needs downloading (empty plan), no cache is used.
+
+**Verified locally (Ubuntu 24.04, apt 2.8.3)** with packages that were not installed, including an epoch
+package (`xfonts-75dpi 1:1.0.5`):
+- A miss downloaded and kept the archives, and the strict check passed.
+- A hit installed with "Need to get 0 B".
+- Corrupting one byte of a cached archive made the strict check exit 1, and the install step discarded and
+  re-downloaded only that file.
+- Reading the real package list returns Playwright's 33 packages.
+
+**Trust boundary.** The caches are written only by this workflow, and GitHub scopes them to the repository and
+branch (a pull request can read caches from its base branch). Archive identity is checked against the apt index
+fetched in the same run. Browser identity is checked against the pin, and the browser suites still launch Chromium
+end to end. A hit does not prove that a fresh download would give the same Chromium bytes. Bumping a key's `v1`
+forces the cold path.
+
+**Baseline without any cache:** 23 s ([40431914866](https://github.com/QSOLKCB/QwakeTF/actions/runs/40431914866)),
+21 s ([40432886585](https://github.com/QSOLKCB/QwakeTF/actions/runs/40432886585)) and 398 s
+([42315339960](https://github.com/QSOLKCB/QwakeTF/actions/runs/42315339960)). The first CI run of the apt cache
+is a miss that populates it. Whether a hit removes the mirror outlier is measured on later runs.
 
 ## Rejected candidates
 
